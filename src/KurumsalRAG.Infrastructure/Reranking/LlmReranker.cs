@@ -44,8 +44,14 @@ public sealed class LlmReranker : IReranker
         var messages = new[]
         {
             ChatMessage.System(
-                "Sen bir alaka (relevance) puanlayıcısısın. Verilen SORU ile her ADAY pasajın " +
-                "ne kadar alakalı olduğunu 0.0 (alakasız) ile 1.0 (tam cevap) arasında puanla. " +
+                "Sen bir alaka (relevance) puanlayıcısısın. Her ADAY pasajı, SORUYU ne kadar " +
+                "yanıtladığına göre 0.0 (soruyla ilgisiz) ile 1.0 (soruyu doğrudan yanıtlıyor) " +
+                "arasında puanla.\n" +
+                "ÖNEMLİ: Bir pasaj soruyu OLUMSUZ da yanıtlasa (ör. 'X hakkı yoktur', 'X yasaktır') " +
+                "bu YÜKSEK alakadır (1.0'a yakın) — çünkü sorunun cevabını içerir. Puanı, pasajın " +
+                "soruyla AYNI KONUDA ve o kişiler/durum hakkında olmasına göre ver; sadece ortak " +
+                "kelime geçmesine göre değil.\n" +
+                "Her adayı BAĞIMSIZ puanla; pasajın listedeki sırası puanı ETKİLEMEZ.\n" +
                 "SADECE şu JSON formatında dön, başka metin yazma: " +
                 "{\"scores\":[{\"id\":<int>,\"score\":<0.0-1.0>}, ...]}"),
             ChatMessage.User(prompt)
@@ -63,10 +69,16 @@ public sealed class LlmReranker : IReranker
             }
 
             // LLM skorunu adaylarla eşle; skoru olmayan aday cosine skorunu korur.
+            // Eşit LLM skorlarında cosine skoru ikincil sıralama anahtarı (kararlı davranış).
             var reranked = candidates
-                .Select((c, i) => new ScoredChunk(c.Chunk, scores.TryGetValue(i, out var s) ? s : c.Score))
-                .OrderByDescending(c => c.Score)
+                .Select((c, i) => (
+                    Chunk: c.Chunk,
+                    LlmScore: scores.TryGetValue(i, out var s) ? s : c.Score,
+                    CosineScore: c.Score))
+                .OrderByDescending(x => x.LlmScore)
+                .ThenByDescending(x => x.CosineScore)
                 .Take(topN)
+                .Select(x => new ScoredChunk(x.Chunk, x.LlmScore))
                 .ToArray();
 
             return reranked;
@@ -89,8 +101,11 @@ public sealed class LlmReranker : IReranker
         for (var i = 0; i < candidates.Count; i++)
         {
             // Puanlama için içeriği kısalt — token tasarrufu, sıralama kalitesini bozmaz.
+            // Chunk'lar zaten ~250 token (~1000 char); kararı belirleyen cümlenin
+            // kesilmemesi için geniş bir üst sınır. Aşırı uzun chunk'larda token korumak
+            // için yine de sınır var.
             var content = candidates[i].Chunk.Content;
-            var snippet = content.Length > 400 ? content[..400] : content;
+            var snippet = content.Length > 1200 ? content[..1200] : content;
             sb.Append("id=").Append(i).Append(": ").Append(snippet.Replace('\n', ' ')).Append('\n');
         }
         return sb.ToString();
