@@ -6,6 +6,7 @@ using KurumsalRAG.Infrastructure.Configuration;
 using KurumsalRAG.Infrastructure.Ingestion;
 using KurumsalRAG.Infrastructure.Persistence;
 using KurumsalRAG.Infrastructure.Providers.OpenAi;
+using KurumsalRAG.Infrastructure.Reranking;
 using KurumsalRAG.Infrastructure.Services;
 using KurumsalRAG.Infrastructure.Services.Defaults;
 using Microsoft.Extensions.Configuration;
@@ -58,9 +59,13 @@ public static class DependencyInjection
         services.AddScoped<IVectorStore, PgVectorStore>();
         services.AddScoped<IDocumentIngestionService, DocumentIngestionService>();
         services.AddScoped<IRagQueryService, RagQueryService>();
+        services.AddScoped<IRerankDiagnostics, RerankDiagnosticsService>();
+
+        // --- Reranker: Faz 2'de LLM tabanlı (PassThroughReranker yerine).
+        // Cross-encoder / Cohere Rerank'e geçişte sadece bu satır değişir. ---
+        services.AddScoped<IReranker, LlmReranker>();
 
         // --- Faz 1 varsayılanları (sonraki fazlarda gerçek implementasyonlarla değişir) ---
-        services.AddSingleton<IReranker, PassThroughReranker>();
         services.AddSingleton<IPromptGuard, NoOpPromptGuard>();
         services.AddSingleton<IFaithfulnessEvaluator, NoOpFaithfulnessEvaluator>();
 
