@@ -1,0 +1,6 @@
+@KurumsalRAG.Api_HostAddress = http://localhost:5264
+
+GET {{KurumsalRAG.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

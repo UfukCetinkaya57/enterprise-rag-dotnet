@@ -1,0 +1,23 @@
+# Secrets — ASLA commit'lenmez
+.env
+*.env
+!.env.example
+
+# .NET build çıktıları
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# Test/örnek dosyalar
+*.pdf
+!samples/*.pdf
+
+# OS
+Thumbs.db
+.DS_Store

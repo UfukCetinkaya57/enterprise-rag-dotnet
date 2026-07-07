@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KurumsalRAG.Api/KurumsalRAG.Api.csproj" />
+    <Project Path="src/KurumsalRAG.Application/KurumsalRAG.Application.csproj" />
+    <Project Path="src/KurumsalRAG.Domain/KurumsalRAG.Domain.csproj" />
+    <Project Path="src/KurumsalRAG.Infrastructure/KurumsalRAG.Infrastructure.csproj" />
+  </Folder>
+</Solution>
