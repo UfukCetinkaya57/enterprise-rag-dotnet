@@ -10,13 +10,16 @@ public sealed class DiagnosticsController : ControllerBase
 {
     private readonly IRerankDiagnostics _rerankDiagnostics;
     private readonly IFaithfulnessDiagnostics _faithfulnessDiagnostics;
+    private readonly IEvaluationDiagnostics _evaluationDiagnostics;
 
     public DiagnosticsController(
         IRerankDiagnostics rerankDiagnostics,
-        IFaithfulnessDiagnostics faithfulnessDiagnostics)
+        IFaithfulnessDiagnostics faithfulnessDiagnostics,
+        IEvaluationDiagnostics evaluationDiagnostics)
     {
         _rerankDiagnostics = rerankDiagnostics;
         _faithfulnessDiagnostics = faithfulnessDiagnostics;
+        _evaluationDiagnostics = evaluationDiagnostics;
     }
 
     /// <summary>Bir sorgu için rerank öncesi (cosine) ve sonrası sıralamayı yan yana döner.</summary>
@@ -58,6 +61,17 @@ public sealed class DiagnosticsController : ControllerBase
         var report = await _faithfulnessDiagnostics.CheckClaimAsync(
             request.Question, request.Answer, cancellationToken);
         return Ok(report);
+    }
+
+    /// <summary>Tek soru için uçtan uca değerlendirme kaydı: guard, chunk'lar, faithfulness, token, maliyet.</summary>
+    [HttpGet("eval")]
+    public async Task<IActionResult> Eval([FromQuery] string question, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+            return BadRequest("Soru boş olamaz.");
+
+        var record = await _evaluationDiagnostics.EvaluateAsync(question, cancellationToken);
+        return Ok(record);
     }
 }
 

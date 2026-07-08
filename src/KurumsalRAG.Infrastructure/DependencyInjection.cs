@@ -8,6 +8,7 @@ using KurumsalRAG.Infrastructure.Ingestion;
 using KurumsalRAG.Infrastructure.Persistence;
 using KurumsalRAG.Infrastructure.Providers.OpenAi;
 using KurumsalRAG.Infrastructure.Reranking;
+using KurumsalRAG.Infrastructure.Security;
 using KurumsalRAG.Infrastructure.Services;
 using KurumsalRAG.Infrastructure.Services.Defaults;
 using Microsoft.Extensions.Configuration;
@@ -66,8 +67,9 @@ public static class DependencyInjection
         // Cross-encoder / Cohere Rerank'e geçişte sadece bu satır değişir. ---
         services.AddScoped<IReranker, LlmReranker>();
 
-        // --- Faz 1 varsayılanı (Faz 4'te RuleBasedPromptGuard ile değişecek) ---
-        services.AddSingleton<IPromptGuard, NoOpPromptGuard>();
+        // --- Faz 4: kural tabanlı prompt injection guard (NoOp'un yerine).
+        // İleride LLM-based classifier bu portun arkasına takılabilir. ---
+        services.AddSingleton<IPromptGuard, RuleBasedPromptGuard>();
 
         // --- Faz 3: Semantic Kernel agentic katman ---
         services.AddSingleton<KernelFactory>();
@@ -79,6 +81,7 @@ public static class DependencyInjection
         // Gerçek faithfulness değerlendirici NoOp'un yerine (SK tabanlı critic).
         services.AddScoped<IFaithfulnessEvaluator, FaithfulnessCheckerAgent>();
         services.AddScoped<IFaithfulnessDiagnostics, FaithfulnessDiagnosticsService>();
+        services.AddScoped<IEvaluationDiagnostics, EvaluationDiagnosticsService>();
 
         return services;
     }

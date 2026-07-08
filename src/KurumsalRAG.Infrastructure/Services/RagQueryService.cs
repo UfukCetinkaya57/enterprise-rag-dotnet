@@ -42,10 +42,21 @@ public sealed class RagQueryService : IRagQueryService
         _logger = logger;
     }
 
+    private const string BlockedText =
+        "Bu istek güvenlik nedeniyle işlenemedi (olası prompt injection tespit edildi).";
+
     public async Task<RagAnswer> AskAsync(string question, CancellationToken cancellationToken = default)
     {
-        var (context, sources, guarded) = await RetrieveContextAsync(question, cancellationToken);
-        var messages = RagPromptBuilder.Build(question, context);
+        var guard = _promptGuard.Inspect(question);
+        if (guard.ShouldBlock)
+        {
+            _logger.LogWarning("İstek bloklandı. Kural: {Rule}", guard.MatchedRule);
+            var blockedObs = new RagObservability(0, 0, 0, 0, PromptGuardTriggered: true);
+            return new RagAnswer(BlockedText, [], blockedObs);
+        }
+
+        var (context, sources, guarded) = await RetrieveContextAsync(guard, cancellationToken);
+        var messages = RagPromptBuilder.Build(guard.SanitizedInput, context);
 
         var completion = await _llm.CompleteAsync(messages, cancellationToken);
 
@@ -81,21 +92,29 @@ public sealed class RagQueryService : IRagQueryService
         string question,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var (context, _, _) = await RetrieveContextAsync(question, cancellationToken);
-        var messages = RagPromptBuilder.Build(question, context);
+        var guard = _promptGuard.Inspect(question);
+        if (guard.ShouldBlock)
+        {
+            _logger.LogWarning("Stream isteği bloklandı. Kural: {Rule}", guard.MatchedRule);
+            yield return BlockedText;
+            yield break;
+        }
+
+        var (context, _, _) = await RetrieveContextAsync(guard, cancellationToken);
+        var messages = RagPromptBuilder.Build(guard.SanitizedInput, context);
 
         await foreach (var token in _llm.StreamAsync(messages, cancellationToken))
             yield return token;
     }
 
-    /// <summary>Guard → embed → retrieve → rerank → context kurma; ortak akış.</summary>
+    /// <summary>embed → retrieve → rerank → context kurma; guard önceden çalıştırılmış olarak gelir.</summary>
     private async Task<(RetrievedContext Context, IReadOnlyList<CitedSource> Sources, bool Guarded)>
-        RetrieveContextAsync(string question, CancellationToken cancellationToken)
+        RetrieveContextAsync(PromptGuardResult guard, CancellationToken cancellationToken)
     {
-        var guard = _promptGuard.Inspect(question);
         if (guard.IsSuspicious)
         {
-            _logger.LogWarning("Prompt guard tetiklendi: {Reasons}", string.Join(", ", guard.Reasons));
+            _logger.LogWarning(
+                "Prompt guard tetiklendi (sanitize modu): {Reasons}", string.Join(", ", guard.Reasons));
         }
         var safeQuestion = guard.SanitizedInput;
 

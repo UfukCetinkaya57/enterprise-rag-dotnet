@@ -18,4 +18,14 @@ public sealed class OpenAiOptions
 
     /// <summary>Rate limit (429) için retry sayısı.</summary>
     public int MaxRetries { get; init; } = 3;
+
+    /// <summary>Maliyet tahmini için 1M token başına USD fiyatları (appsettings'ten).</summary>
+    public PricingOptions Pricing { get; init; } = new();
+}
+
+public sealed class PricingOptions
+{
+    public decimal ChatInputPerMillion { get; init; } = 0.15m;
+    public decimal ChatOutputPerMillion { get; init; } = 0.60m;
+    public decimal EmbeddingPerMillion { get; init; } = 0.02m;
 }

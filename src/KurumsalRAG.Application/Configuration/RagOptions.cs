@@ -11,6 +11,13 @@ public sealed class RagOptions
     public ChunkingOptions Chunking { get; init; } = new();
     public RetrievalOptions Retrieval { get; init; } = new();
     public FaithfulnessOptions Faithfulness { get; init; } = new();
+    public SecurityOptions Security { get; init; } = new();
+}
+
+public sealed class SecurityOptions
+{
+    /// <summary>Guard tespit ettiğinde davranış: "SanitizeAndWarn" veya "Block".</summary>
+    public string PromptGuardAction { get; init; } = "SanitizeAndWarn";
 }
 
 public sealed class ChunkingOptions
