@@ -1,185 +1,181 @@
-# Kurumsal Doküman Asistanı — Enterprise RAG + Agentic
+# Enterprise RAG + Agentic — Kurumsal Doküman Asistanı
 
-Kurumsal PDF dokümanları üzerinde soru-cevap sunan, **provider-agnostik** bir RAG
-(Retrieval Augmented Generation) sistemi + **Semantic Kernel** tabanlı agentic doğrulama
-katmanı. .NET 10, Clean Architecture, PostgreSQL + pgvector.
+Kurumsal PDF dokümanları üzerinde kaynak-atıflı soru-cevap sunan, **provider-agnostik** bir
+RAG (Retrieval Augmented Generation) sistemi ve **Semantic Kernel** tabanlı agentic doğrulama
+katmanı. .NET 8 / ASP.NET Core, Clean Architecture, PostgreSQL + pgvector.
 
-> **Tasarım ilkesi:** LLM ve embedding sağlayıcısı bir interface'in arkasında. Bugün OpenAI;
-> yarın Azure OpenAI (KVKK/TR bölgesi) veya on-prem Ollama'ya iş mantığına dokunmadan geçilebilir.
+Kullanıcı bir PDF yükler → sistem metni chunk'lar, embed eder, vektör deposuna yazar. Kullanıcı
+soru sorar → ilgili chunk'lar getirilir, yeniden sıralanır (rerank), context'e dayalı cevap
+üretilir ve **stream** edilir. Bir **faithfulness (groundedness) checker** ajanı cevabın gerçekten
+getirilen context'e dayandığını denetler; bir **prompt injection guard** kullanıcı girdisini
+işlemeden önce süzer.
 
 ---
 
-## Mimari (Clean Architecture)
+## Mimari
+
+**Clean Architecture — 4 katman.** Bağımlılık yönü içe doğru: `Api → Infrastructure → Application → Domain`.
+Domain hiçbir şeye bağlı değildir; Application yalnızca **port** (interface) tanımlar, somut
+**adapter**'lar Infrastructure'dadır. Bu, sağlayıcı değişimini tek bir katmanla sınırlar.
 
 ```
-KurumsalRAG.sln
- └─ src/
-     ├─ KurumsalRAG.Domain/         # Entity + value object'ler, hiçbir dış bağımlılık YOK
-     ├─ KurumsalRAG.Application/    # Port interface'leri (soyutlamalar) + DTO + config
-     ├─ KurumsalRAG.Infrastructure/ # Adapter'lar: OpenAI, pgvector, SK ajanları, PDF, guard
-     └─ KurumsalRAG.Api/            # Controller'lar, SSE, health, DI kompozisyon kökü
+┌────────────────────────────────────────────────────────────────────┐
+│  Api            Controller'lar · SSE · /health · DI kompozisyon kökü │
+├────────────────────────────────────────────────────────────────────┤
+│  Infrastructure OpenAI · pgvector · SK ajanları · PDF · guard        │  (adapter'lar)
+├────────────────────────────────────────────────────────────────────┤
+│  Application    ILlmProvider · IVectorStore · IReranker · ...        │  (portlar)
+├────────────────────────────────────────────────────────────────────┤
+│  Domain         DocumentChunk · RetrievedContext · ScoredChunk       │  (bağımlılıksız)
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-**Bağımlılık yönü:** `Api → Infrastructure → Application → Domain`. Domain hiçbir şeye bağlı
-değil. Application yalnızca **port** tanımlar; somut **adapter**'lar Infrastructure'da.
+### Ingestion pipeline (`POST /api/documents`)
 
-### Portlar (Application) → Adapter'lar (Infrastructure)
+```
+PDF ──PdfPig──▶ metin ──TextChunker──▶ chunk'lar ──OpenAI embed──▶ pgvector
+                          (~180 token,                (1536-boyut)   (HNSW, cosine)
+                           %15 overlap)
+```
 
-| Port (soyutlama) | Bugünkü adapter | Yarın takılabilecek |
+### Query pipeline (`POST /api/chat` · `GET /api/chat/stream`)
+
+```
+soru ─▶ PromptGuard ─▶ embed ─▶ pgvector top-k ─▶ LlmReranker top-n ─▶ prompt ─▶ LLM ─▶ cevap
+        (injection)             (k=20, cosine)     (n=4)                          │
+                                                                                   ▼
+                                                        FaithfulnessChecker ── groundedness skoru
+                                                        (eşik altıysa → reflection: 1x strict retry)
+```
+
+Agentic akış **RagOrchestrator** tarafından yürütülür: `retrieve → answer → check → (reflection)`.
+
+---
+
+## Teknoloji yığını
+
+- **.NET 8**, ASP.NET Core Web API
+- **Microsoft.SemanticKernel** — agentic orkestrasyon (`IChatCompletionService`, plugin fonksiyonları)
+- **PostgreSQL + pgvector** — vektör deposu, **HNSW** index + cosine benzerliği (Npgsql + Pgvector)
+- **OpenAI** — `text-embedding-3-small` (1536), `gpt-4o-mini`
+- **UglyToad.PdfPig** — PDF metin çıkarımı
+- **Polly** — 429/geçici hata için üstel geri çekilmeli retry
+- **SSE** (Server-Sent Events) — token-token cevap akışı
+
+> Not: Depo `net10.0` hedefiyle geliştirildi (mevcut SDK); tasarım ve API'ler .NET 8 ile birebir
+> uyumludur — `TargetFramework`'ü `net8.0` yapmak yeterlidir.
+
+---
+
+## Öne çıkan tasarım kararları
+
+| Karar | Gerekçe |
+|---|---|
+| **Provider soyutlaması** (`ILlmProvider`, `IEmbeddingProvider`, `IVectorStore`) | LLM/embedding/vektör deposu port arkasında. OpenAI → Azure OpenAI (KVKK/TR bölgesi) veya on-prem Ollama geçişi **iş mantığına dokunmadan**, tek adapter değişimiyle. |
+| **İki aşamalı retrieval** (top-k + rerank) | Cosine benzerliği tek başına yakın skorları ayıramıyor. `LlmReranker`, top-k=20 adayı **tek** LLM çağrısında 0–1 alaka puanlayıp top-n=4'e daraltır. İki dokümanlı çakışan senaryoda (çalışan "3 gün" vs stajyer "hak yok") doğru dokümanı öne çıkarır. |
+| **Faithfulness checker + reflection loop** | Ayrı bir critic ajan, cevaptaki her iddianın context'te desteklenip desteklenmediğini 0–1 skorlar ve desteklenmeyen iddiaları listeler. Skor eşiğin altındaysa AnswerAgent bir kez "strict" modda yeniden üretir (generator-critic); yine düşükse cevaba şeffaf uyarı eklenir. Döngü 1 ile sınırlı. |
+| **Prompt injection guard + yapısal ayrım** | `RuleBasedPromptGuard` üç kategoriyi (talimat ezme, rol/system sızdırma, delimiter kaçışı) TR+EN yakalar. Asıl güvence ise kullanıcı sorusunun system talimatından net delimiter'larla **ayrı bir `user` mesajında** tutulmasıdır — context'e gömülü komutlar talimat olarak yorumlanmaz. |
+| **Graceful degradation** | Reranker bir *iyileştirme* katmanıdır; LLM hatası/bozuk JSON durumunda sessizce cosine sırasına düşer, retrieval'ı bloklamaz. Guard `Block`/`SanitizeAndWarn` modu, faithfulness `Enabled` bayrağı — hepsi config'ten. |
+| **Konfigürasyon disiplini** | Model isimleri, chunk boyutu, top-k/n, faithfulness eşiği, guard davranışı, fiyatlandırma — hepsi `appsettings.json`'dan. Hard-code yok. Secret yalnızca `.env`'de. |
+
+### Port → adapter eşlemesi
+
+| Port | Bugünkü adapter | Yarın takılabilecek |
 |---|---|---|
 | `ILlmProvider` | `OpenAiLlmProvider` | Azure OpenAI, Ollama |
-| `IEmbeddingProvider` | `OpenAiEmbeddingProvider` | Azure, on-prem embedding |
-| `IVectorStore` | `PgVectorStore` (pgvector) | Qdrant, Milvus, Azure AI Search |
+| `IEmbeddingProvider` | `OpenAiEmbeddingProvider` | Azure, on-prem |
+| `IVectorStore` | `PgVectorStore` | Qdrant, Milvus, Azure AI Search |
 | `IReranker` | `LlmReranker` | cross-encoder, Cohere Rerank |
-| `IPromptGuard` | `RuleBasedPromptGuard` | LLM-based classifier, içerik filtreleme servisi |
+| `IPromptGuard` | `RuleBasedPromptGuard` | LLM-based classifier |
 | `IFaithfulnessEvaluator` | `FaithfulnessCheckerAgent` (SK) | başka critic modeli |
 
-Her port'un bir de "no-op / passthrough" varsayılanı vardır (`Services/Defaults/`) — soyutlamanın
-gerçekten değiştirilebilir olduğunun kanıtı.
-
-### Veri akışı
-
-```
-Yükleme:  PDF ─(PdfPig)→ metin ─(TextChunker)→ chunk'lar ─(embed)→ pgvector (HNSW, cosine)
-Sorgu:    soru ─(PromptGuard)→ ─(embed)→ ─(pgvector top-k)→ ─(LlmReranker top-n)→
-          ─(RagPromptBuilder)→ ─(LLM)→ cevap ─(FaithfulnessChecker)→ groundedness skoru
-Agentic:  RagOrchestrator: retrieve → answer → check → (eşik altıysa 1x reflection)
-```
-
 ---
 
-## Fazlar — ne yapıldı
+## Nasıl çalıştırılır
 
-| Faz | İçerik |
-|---|---|
-| **1 — Çekirdek RAG (MVP)** | docker-compose pgvector + HNSW index; PDF ingestion (chunk+embed+store); non-stream sorgu; kaynak-atıflı (`[chunk:N]`) cevap; "dokümanlarda yok" davranışı |
-| **2 — Rerank + SSE** | `LlmReranker` (top-k=20 → top-n=4, tek LLM çağrısında puanlama); SSE token-token streaming (`GET /api/chat/stream`) |
-| **3 — Semantic Kernel agentic** | SK `Kernel` + `IChatCompletionService`; RetrievalAgent (SK plugin), AnswerAgent, FaithfulnessCheckerAgent (gerçek groundedness), RagOrchestrator (generator-critic reflection loop, max 1) |
-| **4 — Güvenlik + Evaluation** | `RuleBasedPromptGuard` (prompt injection tespiti, block/sanitize); system/user yapısal ayrımı; tek yapılandırılmış eval log (guard + chunks + faithfulness + token + maliyet) |
-
----
-
-## Çalıştırma
-
-### Gereksinimler
-- .NET 10 SDK
-- Docker (pgvector için)
-- Bir OpenAI API anahtarı
-
-### Adımlar
+**Gereksinimler:** .NET SDK, Docker, bir OpenAI API anahtarı.
 
 ```bash
-# 1) Secret'ları hazırla
+# 1) Secret'ları hazırla — .env.example placeholder içerir, gerçek key ASLA commit'lenmez
 cp .env.example .env
-# .env içine gerçek OPENAI_API_KEY değerini yaz (.env .gitignore'dadır, commit'lenmez)
+#    .env içindeki OPENAI_API_KEY değerini kendi anahtarınla değiştir
+#    (.env .gitignore'dadır)
 
-# 2) pgvector'ı ayağa kaldır (extension + şema + HNSW index otomatik kurulur)
+# 2) pgvector'ı ayağa kaldır — extension + şema + HNSW index otomatik kurulur (db/init.sql)
 docker compose up -d
 
 # 3) API'yi çalıştır
 dotnet run --project src/KurumsalRAG.Api
 ```
 
-### Uçlar (endpoints)
+### Örnek istekler
+
+```bash
+# Doküman yükle
+curl -X POST http://localhost:5264/api/documents \
+     -F "file=@politika.pdf;type=application/pdf"
+
+# Context-içi soru → kaynak-atıflı cevap
+curl -X POST http://localhost:5264/api/chat \
+     -H "Content-Type: application/json" \
+     -d '{"question":"Çalışanlar haftada kaç gün uzaktan çalışabilir?"}'
+# → "Çalışanlar haftada en fazla 3 (üç) gün uzaktan çalışabilir. [chunk:1]"
+
+# Context-dışı soru → uydurmaz
+curl -X POST http://localhost:5264/api/chat \
+     -H "Content-Type: application/json" \
+     -d '{"question":"Şirket araç tahsisi var mı?"}'
+# → "Sağlanan dokümanlarda bu bilgi bulunmuyor."
+
+# SSE ile token-token akış
+curl -N "http://localhost:5264/api/chat/stream?question=Ev%20ofisi%20ekipman%20deste%C4%9Fi%20ne%20kadar%3F"
+```
+
+### Endpoint'ler
 
 | Metot & yol | İş |
 |---|---|
-| `POST /api/documents` (multipart `file`) | PDF yükle → chunk + embed + store |
-| `POST /api/chat` `{ "question": "..." }` | Non-stream, kaynak-atıflı cevap + observability |
-| `GET  /api/chat/stream?question=...` | SSE, token-token cevap |
+| `POST /api/documents` | PDF yükle → chunk + embed + store |
+| `POST /api/chat` | Non-stream, kaynak-atıflı cevap + observability |
+| `GET  /api/chat/stream` | SSE, token-token cevap |
 | `GET  /health` | DB + provider erişilebilirlik |
-| `GET  /api/diagnostics/rerank?question=...` | Rerank öncesi/sonrası sıralama (yan yana) |
-| `GET  /api/diagnostics/faithfulness?question=...` | Tam agentic akış + groundedness |
+| `GET  /api/diagnostics/rerank` | Rerank öncesi/sonrası sıralama (yan yana) |
+| `GET  /api/diagnostics/faithfulness` | Tam agentic akış + groundedness |
 | `POST /api/diagnostics/faithfulness/check` | İzole checker (kurgulanan cevabı denetle) |
-| `GET  /api/diagnostics/eval?question=...` | Tek yapılandırılmış eval kaydı |
-
-### Örnek
-
-```bash
-curl -X POST http://localhost:5264/api/documents -F "file=@politika.pdf;type=application/pdf"
-curl -X POST http://localhost:5264/api/chat -H "Content-Type: application/json" \
-     -d '{"question":"Çalışanlar kaç gün uzaktan çalışır?"}'
-```
-
----
-
-## Konfigürasyon (`appsettings.json`)
-
-Hiçbir davranış hard-code değil — hepsi konfigüre edilebilir:
-
-```jsonc
-"OpenAI": {
-  "EmbeddingModel": "text-embedding-3-small",   // 1536 boyut
-  "EmbeddingDimensions": 1536,
-  "ChatModel": "gpt-4o-mini",
-  "Pricing": { "ChatInputPerMillion": 0.15, "ChatOutputPerMillion": 0.60, "EmbeddingPerMillion": 0.02 }
-},
-"Rag": {
-  "Chunking":     { "MaxTokens": 180, "OverlapRatio": 0.15 },
-  "Retrieval":    { "TopK": 20, "TopN": 4 },
-  "Faithfulness": { "Threshold": 0.7, "Enabled": true },
-  "Security":     { "PromptGuardAction": "SanitizeAndWarn" }  // veya "Block"
-}
-```
-
-**Secret yönetimi:** API anahtarı yalnızca `.env` / ortam değişkeninde (`OPENAI_API_KEY`).
-`appsettings`'te anahtar yok. `.env` `.gitignore`'da.
+| `GET  /api/diagnostics/eval` | Tek yapılandırılmış eval kaydı (guard + chunk + faithfulness + token + maliyet) |
 
 ---
 
 ## Provider'ı değiştirme
 
-### → Azure OpenAI (KVKK / Türkiye bölgesi)
-1. `KurumsalRAG.Infrastructure/Agents/KernelFactory.cs`: `AddOpenAIChatCompletion` →
-   `AddAzureOpenAIChatCompletion(deployment, endpoint, apiKey)`.
-2. `OpenAiEmbeddingProvider` / `OpenAiLlmProvider`'daki `BaseUrl`'ü Azure endpoint'ine çevir
-   (ya da Azure için ayrı adapter yaz ve `DependencyInjection`'da o adapter'ı kaydet).
-3. İş mantığı (`RagQueryService`, ajanlar, controller'lar) **hiç değişmez** — port'lar aynı.
+**→ Azure OpenAI (KVKK / TR bölgesi):** `KernelFactory`'de `AddOpenAIChatCompletion` →
+`AddAzureOpenAIChatCompletion`; OpenAI adapter'larının `BaseUrl`'ünü Azure endpoint'ine çevir.
+İş mantığı değişmez.
 
-### → On-prem Ollama
-1. `ILlmProvider` ve `IEmbeddingProvider` için `OllamaLlmProvider` / `OllamaEmbeddingProvider`
-   yaz (Ollama'nın `/api/chat` ve `/api/embeddings` uçlarına HTTP).
-2. `DependencyInjection.AddInfrastructure` içinde OpenAI adapter kaydını Ollama ile değiştir.
-3. Embedding boyutu değişirse `db/init.sql`'deki `vector(1536)` ve `EmbeddingDimensions`'ı güncelle.
+**→ On-prem Ollama:** `ILlmProvider` / `IEmbeddingProvider` için Ollama adapter'ları yaz,
+`DependencyInjection`'da kaydı değiştir. Embedding boyutu değişirse `db/init.sql`'deki
+`vector(1536)` ve `EmbeddingDimensions`'ı güncelle.
 
-### → Farklı vektör deposu (Qdrant/Milvus/Azure AI Search)
-`IVectorStore` arkasına yeni adapter yaz, `DependencyInjection`'da tek satır değiştir.
+**→ Farklı vektör deposu:** `IVectorStore` arkasına yeni adapter, DI'da tek satır.
 
 ---
 
-## Güvenlik yaklaşımı (savunma derinliği)
+## Güvenlik yaklaşımı
 
-1. **Prompt injection guard (`IPromptGuard`).** Kural tabanlı, TR + EN. Üç kategori:
-   talimat ezme ("önceki talimatları unut" / "ignore previous instructions"), rol/system
-   sızdırma ("act as" / "system prompt'unu göster"), delimiter/çıkış kaçışı (sahte
-   `CONTEXT:` / `SORU:` / `###` blokları). Sonuç: `{ IsSuspicious, MatchedRule, Action }`.
-   Davranış `appsettings`'ten seçilir: **`Block`** (isteği reddet) veya **`SanitizeAndWarn`**
-   (delimiter'ları nötrleştir, işaretle, akışa devam et).
-2. **System/User yapısal ayrımı.** Asıl güvence guard değil, `RagPromptBuilder`'ın kullanıcı
-   sorusunu system talimatından **net delimiter'larla** (`<<< >>>`) ayrı bir `user` mesajında
-   tutmasıdır. Böylece context'e gömülü bir "SİSTEM: şunu yap" enjeksiyonu talimat seviyesinde
-   yorumlanmaz — model onu veri olarak görür. (Test edildi: gömülü injection uygulanmadı.)
-3. **Groundedness denetimi (`IFaithfulnessEvaluator`).** Üretilen cevabın context'e dayanıp
-   dayanmadığını (hallucination) denetler; eşik altında reflection ya da uyarı.
-4. **Secret yönetimi.** Anahtar sadece `.env`'de; koda/appsettings'e gömülmez.
-5. **Dayanıklılık.** OpenAI 429/geçici hatalar için Polly ile üstel geri çekilmeli retry.
-
-> **Not:** Kural tabanlı guard ilk katmandır; tek başına yeterli sayılmaz. `IPromptGuard`
-> soyutlaması sayesinde ileride LLM tabanlı bir injection-classifier veya harici içerik
-> filtreleme servisi aynı portun arkasına takılabilir.
+- **Secret yönetimi.** API anahtarı yalnızca `.env` / ortam değişkeninde (`OPENAI_API_KEY`).
+  `appsettings`'te anahtar yok; `.env` `.gitignore`'da. Gerçek anahtar hiçbir zaman commit'lenmez.
+- **Prompt injection guard.** Kural tabanlı ilk katman (block / sanitize, config'ten). Asıl
+  güvence: system/user içeriğinin yapısal ayrımı (context'e gömülü komut talimat sayılmaz).
+- **On-prem / KVKK.** Provider soyutlaması sayesinde tüm LLM/embedding trafiği Azure'un TR
+  bölgesine veya tamamen on-prem Ollama'ya taşınabilir — veri-ikameti senaryosu için hazır.
+- **Groundedness denetimi.** Faithfulness checker hallucination'ı yakalar; düşük skorlu
+  cevaplar reflection'a girer ya da uyarıyla işaretlenir.
 
 ---
 
-## Gözlemlenebilirlik (observability)
+## Geliştirici notu — OneDrive
 
-Her cevap için `RagObservability` / eval kaydı: kullanılan chunk id'leri + retrieval skorları,
-faithfulness skoru + geçti/kaldı + desteklenmeyen iddialar, guard sonucu, prompt/completion/
-embedding token ve **tahmini USD maliyet**. `GET /api/diagnostics/eval` tek yapılandırılmış
-kayıt döndürür; ayrıca her istek tek satır yapılandırılmış log üretir (`EVAL q=... costUsd=...`).
-
----
-
-## Teknoloji yığını
-
-.NET 10 · ASP.NET Core · Microsoft.SemanticKernel · PostgreSQL + pgvector (Npgsql + Pgvector) ·
-UglyToad.PdfPig · Polly · OpenAI (`text-embedding-3-small`, `gpt-4o-mini`)
+Depo `OneDrive\Desktop\RAG` altında. OneDrive senkronizasyonu ile git bazen `bin/`, `obj/`
+gibi dizinlerde dosya kilidi çakışması yaşayabilir (bu dizinler zaten `.gitignore`'da). Bir
+sorun görülürse OneDrive senkronunu kısa süreliğine duraklatmak yeterlidir; depoyu taşımak
+zorunlu değildir.
