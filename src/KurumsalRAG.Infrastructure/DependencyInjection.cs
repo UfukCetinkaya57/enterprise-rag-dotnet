@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
+using KurumsalRAG.Infrastructure.Agents;
 using KurumsalRAG.Infrastructure.Configuration;
 using KurumsalRAG.Infrastructure.Ingestion;
 using KurumsalRAG.Infrastructure.Persistence;
@@ -65,9 +66,19 @@ public static class DependencyInjection
         // Cross-encoder / Cohere Rerank'e geçişte sadece bu satır değişir. ---
         services.AddScoped<IReranker, LlmReranker>();
 
-        // --- Faz 1 varsayılanları (sonraki fazlarda gerçek implementasyonlarla değişir) ---
+        // --- Faz 1 varsayılanı (Faz 4'te RuleBasedPromptGuard ile değişecek) ---
         services.AddSingleton<IPromptGuard, NoOpPromptGuard>();
-        services.AddSingleton<IFaithfulnessEvaluator, NoOpFaithfulnessEvaluator>();
+
+        // --- Faz 3: Semantic Kernel agentic katman ---
+        services.AddSingleton<KernelFactory>();
+        // Her istek için taze bir Kernel (SK Kernel'i hafif; scoped uygun).
+        services.AddScoped(sp => sp.GetRequiredService<KernelFactory>().Create());
+        services.AddScoped<RetrievalAgent>();
+        services.AddScoped<AnswerAgent>();
+        services.AddScoped<RagOrchestrator>();
+        // Gerçek faithfulness değerlendirici NoOp'un yerine (SK tabanlı critic).
+        services.AddScoped<IFaithfulnessEvaluator, FaithfulnessCheckerAgent>();
+        services.AddScoped<IFaithfulnessDiagnostics, FaithfulnessDiagnosticsService>();
 
         return services;
     }
