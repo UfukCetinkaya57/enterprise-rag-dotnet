@@ -5,4 +5,7 @@
     <Project Path="src/KurumsalRAG.Domain/KurumsalRAG.Domain.csproj" />
     <Project Path="src/KurumsalRAG.Infrastructure/KurumsalRAG.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KurumsalRAG.Tests/KurumsalRAG.Tests.csproj" />
+  </Folder>
 </Solution>
