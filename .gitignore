@@ -14,9 +14,11 @@ obj/
 .idea/
 .vscode/
 
-# Test/örnek dosyalar
+# Test/örnek dosyalar (yerel yüklenen PDF'ler commit'lenmez)
 *.pdf
 !samples/*.pdf
+# Seed dokümanı repo varlığıdır — commit'lenir
+!src/KurumsalRAG.Api/SeedData/*.pdf
 
 # OS
 Thumbs.db
