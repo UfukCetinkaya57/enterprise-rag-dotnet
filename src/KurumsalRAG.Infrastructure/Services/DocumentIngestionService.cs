@@ -1,7 +1,9 @@
 using KurumsalRAG.Application.Abstractions;
+using KurumsalRAG.Application.Configuration;
 using KurumsalRAG.Domain.Entities;
 using KurumsalRAG.Infrastructure.Ingestion;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace KurumsalRAG.Infrastructure.Services;
 
@@ -15,6 +17,7 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
     private readonly TextChunker _chunker;
     private readonly IEmbeddingProvider _embeddings;
     private readonly IVectorStore _vectorStore;
+    private readonly UploadOptions _upload;
     private readonly ILogger<DocumentIngestionService> _logger;
 
     public DocumentIngestionService(
@@ -22,30 +25,35 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
         TextChunker chunker,
         IEmbeddingProvider embeddings,
         IVectorStore vectorStore,
+        IOptions<DemoOptions> demo,
         ILogger<DocumentIngestionService> logger)
     {
         _pdfExtractor = pdfExtractor;
         _chunker = chunker;
         _embeddings = embeddings;
         _vectorStore = vectorStore;
+        _upload = demo.Value.Upload;
         _logger = logger;
     }
 
     public async Task<IngestionResult> IngestPdfAsync(
         Stream pdfStream,
         string fileName,
+        string sessionId,
+        long fileBytes,
         CancellationToken cancellationToken = default)
     {
-        var text = _pdfExtractor.ExtractText(pdfStream);
-        if (string.IsNullOrWhiteSpace(text))
+        var extract = _pdfExtractor.ExtractText(pdfStream, _upload.MaxPages);
+        if (string.IsNullOrWhiteSpace(extract.Text))
             throw new InvalidOperationException($"'{fileName}' dosyasından metin çıkarılamadı (boş ya da taranmış PDF olabilir).");
 
-        var chunkTexts = _chunker.Chunk(text);
-        _logger.LogInformation("'{File}' {ChunkCount} parçaya bölündü.", fileName, chunkTexts.Count);
+        var chunkTexts = _chunker.Chunk(extract.Text);
+        _logger.LogInformation("'{File}' (session={Session}) {ChunkCount} parçaya bölündü.",
+            fileName, sessionId, chunkTexts.Count);
 
         var embeddings = await _embeddings.EmbedBatchAsync(chunkTexts, cancellationToken);
 
-        var document = DocumentEntity.Create(fileName);
+        var document = DocumentEntity.Create(fileName, sessionId, fileBytes);
         var chunks = new List<DocumentChunk>(chunkTexts.Count);
         var totalTokens = 0;
 
@@ -57,6 +65,7 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
             {
                 Id = Guid.CreateVersion7(),
                 DocumentId = document.Id,
+                SessionId = sessionId,
                 Content = chunkTexts[i],
                 ChunkIndex = i,
                 TokenCount = tokens,

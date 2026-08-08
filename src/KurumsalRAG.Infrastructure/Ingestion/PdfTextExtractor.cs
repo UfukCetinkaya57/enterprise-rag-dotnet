@@ -3,12 +3,17 @@ using UglyToad.PdfPig;
 
 namespace KurumsalRAG.Infrastructure.Ingestion;
 
-/// <summary>UglyToad.PdfPig ile PDF'ten düz metin çıkarır (sayfa sayfa).</summary>
+/// <summary>UglyToad.PdfPig ile PDF'ten düz metin çıkarır (sayfa sayfa) + sayfa sayısı.</summary>
 public sealed class PdfTextExtractor
 {
-    public string ExtractText(Stream pdfStream)
+    /// <param name="maxPages">Aşılırsa hata fırlatılır (upload sertleştirme). 0 = sınırsız.</param>
+    public PdfExtractResult ExtractText(Stream pdfStream, int maxPages = 0)
     {
         using var document = PdfDocument.Open(pdfStream);
+
+        if (maxPages > 0 && document.NumberOfPages > maxPages)
+            throw new InvalidOperationException(
+                $"PDF {document.NumberOfPages} sayfa; izin verilen üst sınır {maxPages} sayfa.");
 
         var sb = new StringBuilder();
         foreach (var page in document.GetPages())
@@ -21,6 +26,8 @@ public sealed class PdfTextExtractor
                 sb.Append(pageText).Append("\n\n");
         }
 
-        return sb.ToString().Trim();
+        return new PdfExtractResult(sb.ToString().Trim(), document.NumberOfPages);
     }
 }
+
+public sealed record PdfExtractResult(string Text, int PageCount);

@@ -1,8 +1,6 @@
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Domain.Entities;
 using KurumsalRAG.Domain.ValueObjects;
-using KurumsalRAG.Infrastructure.Configuration;
-using Microsoft.Extensions.Options;
 using Npgsql;
 using Pgvector;
 
@@ -10,7 +8,7 @@ namespace KurumsalRAG.Infrastructure.Persistence;
 
 /// <summary>
 /// PostgreSQL + pgvector adapter'ı (IVectorStore). Cosine benzerliği (&lt;=&gt; operatörü)
-/// ile top-k arama. Qdrant/Milvus/Azure AI Search'e geçişte sadece bu sınıf değişir.
+/// ile session-filtreli top-k arama. Qdrant/Milvus/Azure AI Search'e geçişte sadece bu sınıf değişir.
 /// </summary>
 public sealed class PgVectorStore : IVectorStore
 {
@@ -21,14 +19,16 @@ public sealed class PgVectorStore : IVectorStore
     public async Task SaveDocumentAsync(DocumentEntity document, CancellationToken cancellationToken = default)
     {
         const string sql = """
-            INSERT INTO documents (id, file_name, uploaded_at, chunk_count)
-            VALUES (@id, @file_name, @uploaded_at, @chunk_count)
+            INSERT INTO documents (id, session_id, file_name, file_bytes, uploaded_at, chunk_count)
+            VALUES (@id, @session_id, @file_name, @file_bytes, @uploaded_at, @chunk_count)
             ON CONFLICT (id) DO UPDATE SET chunk_count = EXCLUDED.chunk_count
             """;
 
         await using var cmd = _dataSource.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", document.Id);
+        cmd.Parameters.AddWithValue("session_id", document.SessionId);
         cmd.Parameters.AddWithValue("file_name", document.FileName);
+        cmd.Parameters.AddWithValue("file_bytes", document.FileBytes);
         cmd.Parameters.AddWithValue("uploaded_at", document.UploadedAt);
         cmd.Parameters.AddWithValue("chunk_count", document.ChunkCount);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -43,10 +43,9 @@ public sealed class PgVectorStore : IVectorStore
 
         await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
 
-        // Toplu yazım: binary COPY yerine basit ve okunur bir batch INSERT.
         const string sql = """
-            INSERT INTO chunks (id, document_id, content, chunk_index, token_count, embedding)
-            VALUES (@id, @document_id, @content, @chunk_index, @token_count, @embedding)
+            INSERT INTO chunks (id, document_id, session_id, content, chunk_index, token_count, embedding)
+            VALUES (@id, @document_id, @session_id, @content, @chunk_index, @token_count, @embedding)
             ON CONFLICT (id) DO UPDATE
                 SET content = EXCLUDED.content, embedding = EXCLUDED.embedding
             """;
@@ -57,6 +56,7 @@ public sealed class PgVectorStore : IVectorStore
             await using var cmd = new NpgsqlCommand(sql, conn, tx);
             cmd.Parameters.AddWithValue("id", chunk.Id);
             cmd.Parameters.AddWithValue("document_id", chunk.DocumentId);
+            cmd.Parameters.AddWithValue("session_id", chunk.SessionId);
             cmd.Parameters.AddWithValue("content", chunk.Content);
             cmd.Parameters.AddWithValue("chunk_index", chunk.ChunkIndex);
             cmd.Parameters.AddWithValue("token_count", chunk.TokenCount);
@@ -69,19 +69,26 @@ public sealed class PgVectorStore : IVectorStore
     public async Task<IReadOnlyList<ScoredChunk>> SearchAsync(
         float[] queryEmbedding,
         int topK,
+        IReadOnlyCollection<string> allowedSessionIds,
         CancellationToken cancellationToken = default)
     {
+        if (allowedSessionIds.Count == 0)
+            return [];
+
         // <=> = cosine distance (0=aynı yön). Skor = 1 - distance => yüksek = daha alakalı.
+        // session_id = ANY(@sessions): yalnızca izin verilen session'lar (kullanıcı + seed).
         const string sql = """
-            SELECT id, document_id, content, chunk_index, token_count,
+            SELECT id, document_id, session_id, content, chunk_index, token_count,
                    1 - (embedding <=> @query) AS score
             FROM chunks
+            WHERE session_id = ANY(@sessions)
             ORDER BY embedding <=> @query
             LIMIT @topk
             """;
 
         await using var cmd = _dataSource.CreateCommand(sql);
         cmd.Parameters.AddWithValue("query", new Vector(queryEmbedding));
+        cmd.Parameters.AddWithValue("sessions", allowedSessionIds.ToArray());
         cmd.Parameters.AddWithValue("topk", topK);
 
         var results = new List<ScoredChunk>(topK);
@@ -92,14 +99,33 @@ public sealed class PgVectorStore : IVectorStore
             {
                 Id = reader.GetGuid(0),
                 DocumentId = reader.GetGuid(1),
-                Content = reader.GetString(2),
-                ChunkIndex = reader.GetInt32(3),
-                TokenCount = reader.GetInt32(4)
+                SessionId = reader.GetString(2),
+                Content = reader.GetString(3),
+                ChunkIndex = reader.GetInt32(4),
+                TokenCount = reader.GetInt32(5)
                 // Embedding retrieval'da geri okunmuyor (gereksiz ağırlık).
             };
-            results.Add(new ScoredChunk(chunk, reader.GetDouble(5)));
+            results.Add(new ScoredChunk(chunk, reader.GetDouble(6)));
         }
         return results;
+    }
+
+    public async Task<int> PurgeExpiredAsync(
+        DateTimeOffset olderThan,
+        string keepSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        // ON DELETE CASCADE sayesinde documents silinince chunks da gider.
+        // Süresi dolmuş session'ların dokümanlarını sil (seed hariç).
+        const string sql = """
+            DELETE FROM documents
+            WHERE session_id <> @keep AND uploaded_at < @cutoff
+            """;
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("keep", keepSessionId);
+        cmd.Parameters.AddWithValue("cutoff", olderThan);
+        return await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default)

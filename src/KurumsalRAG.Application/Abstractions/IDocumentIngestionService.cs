@@ -8,6 +8,8 @@ public interface IDocumentIngestionService
     Task<IngestionResult> IngestPdfAsync(
         Stream pdfStream,
         string fileName,
+        string sessionId,
+        long fileBytes,
         CancellationToken cancellationToken = default);
 }
 

@@ -15,10 +15,24 @@ public interface IVectorStore
     /// <summary>Chunk'ları embedding'leriyle birlikte upsert eder.</summary>
     Task UpsertChunksAsync(IReadOnlyList<DocumentChunk> chunks, CancellationToken cancellationToken = default);
 
-    /// <summary>Sorgu vektörüne en yakın top-k chunk'ı cosine benzerliği ile getirir.</summary>
+    /// <summary>
+    /// Sorgu vektörüne en yakın top-k chunk'ı cosine benzerliği ile getirir.
+    /// Session izolasyonu: yalnızca <paramref name="allowedSessionIds"/> içindeki
+    /// session'lara ait chunk'lar aranır (kullanıcının kendi + 'seed').
+    /// </summary>
     Task<IReadOnlyList<ScoredChunk>> SearchAsync(
         float[] queryEmbedding,
         int topK,
+        IReadOnlyCollection<string> allowedSessionIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// TTL temizliği: verilen tarihten eski chunk'ları/dokümanları siler,
+    /// <paramref name="keepSessionId"/> (seed) hariç. Silinen chunk sayısını döndürür.
+    /// </summary>
+    Task<int> PurgeExpiredAsync(
+        DateTimeOffset olderThan,
+        string keepSessionId,
         CancellationToken cancellationToken = default);
 
     /// <summary>DB erişilebilirlik kontrolü (health check).</summary>

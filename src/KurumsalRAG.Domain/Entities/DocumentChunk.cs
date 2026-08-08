@@ -8,6 +8,10 @@ public sealed class DocumentChunk
 {
     public Guid Id { get; init; }
     public Guid DocumentId { get; init; }
+
+    /// <summary>Session izolasyonu için denormalize edilmiş session id ('seed' = örnek).</summary>
+    public string SessionId { get; init; } = string.Empty;
+
     public string Content { get; init; } = string.Empty;
 
     /// <summary>Doküman içindeki 0-tabanlı sıra numarası.</summary>

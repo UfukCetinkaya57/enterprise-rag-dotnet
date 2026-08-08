@@ -1,15 +1,18 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
+using KurumsalRAG.Application.Sessions;
 using KurumsalRAG.Domain.ValueObjects;
+using KurumsalRAG.Infrastructure.Ingestion;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace KurumsalRAG.Infrastructure.Services;
 
 /// <summary>
-/// Query use-case: soru → guard → embed → retrieve → rerank → prompt → generate.
-/// Tüm bağımlılıklar port; hiçbir somut sağlayıcıya bağlı değil.
+/// Query use-case: soru → kill-switch/bütçe/cache → guard → embed → session-filtreli retrieve →
+/// rerank → prompt → generate → faithfulness. Tüm bağımlılıklar port; somut sağlayıcıya bağlı değil.
 /// </summary>
 public sealed class RagQueryService : IRagQueryService
 {
@@ -19,7 +22,11 @@ public sealed class RagQueryService : IRagQueryService
     private readonly IReranker _reranker;
     private readonly ILlmProvider _llm;
     private readonly IFaithfulnessEvaluator _faithfulness;
+    private readonly IResponseCache _cache;
+    private readonly ITokenBudgetGuard _budget;
+    private readonly ISessionAccessor _session;
     private readonly RagOptions _options;
+    private readonly DemoOptions _demo;
     private readonly ILogger<RagQueryService> _logger;
 
     public RagQueryService(
@@ -29,7 +36,11 @@ public sealed class RagQueryService : IRagQueryService
         IReranker reranker,
         ILlmProvider llm,
         IFaithfulnessEvaluator faithfulness,
+        IResponseCache cache,
+        ITokenBudgetGuard budget,
+        ISessionAccessor session,
         IOptions<RagOptions> options,
+        IOptions<DemoOptions> demo,
         ILogger<RagQueryService> logger)
     {
         _promptGuard = promptGuard;
@@ -38,24 +49,48 @@ public sealed class RagQueryService : IRagQueryService
         _reranker = reranker;
         _llm = llm;
         _faithfulness = faithfulness;
+        _cache = cache;
+        _budget = budget;
+        _session = session;
         _options = options.Value;
+        _demo = demo.Value;
         _logger = logger;
     }
 
     private const string BlockedText =
         "Bu istek güvenlik nedeniyle işlenemedi (olası prompt injection tespit edildi).";
 
+    private const string LimitedText =
+        "Günlük demo limiti doldu veya demo geçici olarak kapalı. Lütfen yarın tekrar deneyin.";
+
+    // ---------------------------------------------------------------- Non-stream
+
     public async Task<RagAnswer> AskAsync(string question, CancellationToken cancellationToken = default)
     {
+        // Kill switch / bütçe: LLM'e gitmeden nazik "limited" cevabı.
+        if (await IsLimitedAsync(cancellationToken))
+            return LimitedAnswer();
+
         var guard = _promptGuard.Inspect(question);
         if (guard.ShouldBlock)
         {
             _logger.LogWarning("İstek bloklandı. Kural: {Rule}", guard.MatchedRule);
-            var blockedObs = new RagObservability(0, 0, 0, 0, PromptGuardTriggered: true);
-            return new RagAnswer(BlockedText, [], blockedObs);
+            return new RagAnswer(BlockedText, [], Blocked(), AnswerType.Normal);
         }
 
-        var (context, sources, guarded) = await RetrieveContextAsync(guard, cancellationToken);
+        // Cache: (session + normalize soru). Hit'te LLM'e gidilmez.
+        var cached = await _cache.GetAsync(_session.SessionId, guard.SanitizedInput, cancellationToken);
+        if (cached is not null)
+        {
+            _logger.LogInformation("Cache hit (session={Session}). Toplam hit={Hits}",
+                _session.SessionId, _cache.HitCount);
+            return new RagAnswer(
+                cached.Answer, cached.Sources,
+                new RagObservability(0, cached.Sources.Count, 0, 0, cached.FaithfulnessScore, guard.IsSuspicious),
+                AnswerType.Cached);
+        }
+
+        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, cancellationToken);
         var messages = RagPromptBuilder.Build(guard.SanitizedInput, context);
 
         var completion = await _llm.CompleteAsync(messages, cancellationToken);
@@ -66,12 +101,12 @@ public sealed class RagQueryService : IRagQueryService
             var eval = await _faithfulness.EvaluateAsync(completion.Content, context, cancellationToken);
             faithfulnessScore = eval.Score;
             if (!eval.Passed)
-            {
-                _logger.LogWarning(
-                    "Düşük groundedness skoru {Score:F2}. Desteklenmeyen iddialar: {Claims}",
+                _logger.LogWarning("Düşük groundedness {Score:F2}: {Claims}",
                     eval.Score, string.Join(" | ", eval.UnsupportedClaims));
-            }
         }
+
+        var totalTokens = completion.Usage.TotalTokens + embeddingTokens;
+        await _budget.RecordUsageAsync(totalTokens, cancellationToken);
 
         var observability = new RagObservability(
             RetrievedCount: sources.Count == 0 ? 0 : _options.Retrieval.TopK,
@@ -79,47 +114,120 @@ public sealed class RagQueryService : IRagQueryService
             PromptTokens: completion.Usage.PromptTokens,
             CompletionTokens: completion.Usage.CompletionTokens,
             FaithfulnessScore: faithfulnessScore,
-            PromptGuardTriggered: guarded);
+            PromptGuardTriggered: guard.IsSuspicious);
 
-        _logger.LogInformation(
-            "Cevap üretildi. Tokenlar: prompt={Prompt}, completion={Completion}, faithfulness={Faith}",
-            observability.PromptTokens, observability.CompletionTokens, faithfulnessScore);
+        // Başarılı normal cevabı cache'le.
+        await _cache.SetAsync(_session.SessionId, guard.SanitizedInput,
+            new CachedAnswer(completion.Content, sources, faithfulnessScore), cancellationToken);
 
-        return new RagAnswer(completion.Content, sources, observability);
+        _logger.LogInformation("Cevap üretildi. tokens={Tokens} faithfulness={Faith}",
+            totalTokens, faithfulnessScore);
+
+        return new RagAnswer(completion.Content, sources, observability, AnswerType.Normal);
     }
 
-    public async IAsyncEnumerable<string> StreamAsync(
+    // ---------------------------------------------------------------- Stream
+
+    public async IAsyncEnumerable<RagStreamChunk> StreamAsync(
         string question,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var guard = _promptGuard.Inspect(question);
-        if (guard.ShouldBlock)
+        if (await IsLimitedAsync(cancellationToken))
         {
-            _logger.LogWarning("Stream isteği bloklandı. Kural: {Rule}", guard.MatchedRule);
-            yield return BlockedText;
+            yield return RagStreamChunk.Status(AnswerType.Limited);
+            yield return RagStreamChunk.TokenChunk(LimitedText);
+            yield return RagStreamChunk.FinalChunk(LimitedAnswer());
             yield break;
         }
 
-        var (context, _, _) = await RetrieveContextAsync(guard, cancellationToken);
+        var guard = _promptGuard.Inspect(question);
+        if (guard.ShouldBlock)
+        {
+            yield return RagStreamChunk.Status(AnswerType.Normal);
+            yield return RagStreamChunk.TokenChunk(BlockedText);
+            yield return RagStreamChunk.FinalChunk(new RagAnswer(BlockedText, [], Blocked()));
+            yield break;
+        }
+
+        var cached = await _cache.GetAsync(_session.SessionId, guard.SanitizedInput, cancellationToken);
+        if (cached is not null)
+        {
+            _logger.LogInformation("Cache hit (stream, session={Session}).", _session.SessionId);
+            yield return RagStreamChunk.Status(AnswerType.Cached);
+            yield return RagStreamChunk.TokenChunk(cached.Answer);
+            yield return RagStreamChunk.FinalChunk(new RagAnswer(
+                cached.Answer, cached.Sources,
+                new RagObservability(0, cached.Sources.Count, 0, 0, cached.FaithfulnessScore),
+                AnswerType.Cached));
+            yield break;
+        }
+
+        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, cancellationToken);
         var messages = RagPromptBuilder.Build(guard.SanitizedInput, context);
 
+        yield return RagStreamChunk.Status(AnswerType.Normal);
+
+        // Token'ları akıtırken tam cevabı biriktir (sonra faithfulness + cache için).
+        var full = new StringBuilder();
         await foreach (var token in _llm.StreamAsync(messages, cancellationToken))
-            yield return token;
+        {
+            full.Append(token);
+            yield return RagStreamChunk.TokenChunk(token);
+        }
+
+        var answer = full.ToString();
+
+        double? faithfulnessScore = null;
+        if (_options.Faithfulness.Enabled && !context.IsEmpty)
+        {
+            var eval = await _faithfulness.EvaluateAsync(answer, context, cancellationToken);
+            faithfulnessScore = eval.Score;
+        }
+
+        // Stream'de gerçek usage yok; metin uzunluğundan kestir ve bütçeye yaz.
+        var estTokens = TokenEstimator.Estimate(context.ToPromptBlock() + answer) + embeddingTokens;
+        await _budget.RecordUsageAsync(estTokens, cancellationToken);
+
+        await _cache.SetAsync(_session.SessionId, guard.SanitizedInput,
+            new CachedAnswer(answer, sources, faithfulnessScore), cancellationToken);
+
+        var observability = new RagObservability(
+            _options.Retrieval.TopK, sources.Count, 0, 0, faithfulnessScore, guard.IsSuspicious);
+        yield return RagStreamChunk.FinalChunk(new RagAnswer(answer, sources, observability, AnswerType.Normal));
     }
 
-    /// <summary>embed → retrieve → rerank → context kurma; guard önceden çalıştırılmış olarak gelir.</summary>
-    private async Task<(RetrievedContext Context, IReadOnlyList<CitedSource> Sources, bool Guarded)>
+    // ---------------------------------------------------------------- Ortak
+
+    /// <summary>Kill switch kapalı mı ya da günlük bütçe doldu mu?</summary>
+    private async Task<bool> IsLimitedAsync(CancellationToken cancellationToken)
+    {
+        if (!_demo.Enabled)
+            return true;
+
+        var status = await _budget.CheckAsync(cancellationToken);
+        if (!status.WithinBudget)
+            _logger.LogWarning("Günlük token bütçesi doldu: {Used}/{Budget}", status.UsedToday, status.DailyBudget);
+        return !status.WithinBudget;
+    }
+
+    private static RagAnswer LimitedAnswer()
+        => new(LimitedText, [], new RagObservability(0, 0, 0, 0), AnswerType.Limited);
+
+    private static RagObservability Blocked() => new(0, 0, 0, 0, PromptGuardTriggered: true);
+
+    /// <summary>embed → session-filtreli retrieve → rerank → context. Embedding token tahminini de döndürür.</summary>
+    private async Task<(RetrievedContext Context, IReadOnlyList<CitedSource> Sources, int EmbeddingTokens)>
         RetrieveContextAsync(PromptGuardResult guard, CancellationToken cancellationToken)
     {
         if (guard.IsSuspicious)
-        {
-            _logger.LogWarning(
-                "Prompt guard tetiklendi (sanitize modu): {Reasons}", string.Join(", ", guard.Reasons));
-        }
+            _logger.LogWarning("Prompt guard (sanitize): {Reasons}", string.Join(", ", guard.Reasons));
+
         var safeQuestion = guard.SanitizedInput;
+        var embeddingTokens = TokenEstimator.Estimate(safeQuestion);
 
         var queryEmbedding = await _embeddings.EmbedAsync(safeQuestion, cancellationToken);
-        var candidates = await _vectorStore.SearchAsync(queryEmbedding, _options.Retrieval.TopK, cancellationToken);
+        var candidates = await _vectorStore.SearchAsync(
+            queryEmbedding, _options.Retrieval.TopK, AllowedSessions(), cancellationToken);
         var ranked = await _reranker.RerankAsync(safeQuestion, candidates, _options.Retrieval.TopN, cancellationToken);
 
         var retrievedChunks = new List<RetrievedChunk>(ranked.Count);
@@ -132,6 +240,9 @@ public sealed class RagQueryService : IRagQueryService
             sources.Add(new CitedSource(reference, scored.Chunk.Id, scored.Score));
         }
 
-        return (new RetrievedContext(retrievedChunks), sources, guard.IsSuspicious);
+        return (new RetrievedContext(retrievedChunks), sources, embeddingTokens);
     }
+
+    /// <summary>Retrieval'ın görebileceği session'lar: kullanıcının kendi + seed (örnek doküman).</summary>
+    private string[] AllowedSessions() => SessionScope.Allowed(_session.SessionId, _demo.SeedSessionId);
 }

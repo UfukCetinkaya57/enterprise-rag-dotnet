@@ -16,18 +16,24 @@ public sealed class RerankDiagnosticsService : IRerankDiagnostics
     private readonly NpgsqlDataSource _dataSource;
     private readonly IEmbeddingProvider _embeddings;
     private readonly IReranker _reranker;
+    private readonly ISessionAccessor _session;
     private readonly RagOptions _options;
+    private readonly DemoOptions _demo;
 
     public RerankDiagnosticsService(
         NpgsqlDataSource dataSource,
         IEmbeddingProvider embeddings,
         IReranker reranker,
-        IOptions<RagOptions> options)
+        ISessionAccessor session,
+        IOptions<RagOptions> options,
+        IOptions<DemoOptions> demo)
     {
         _dataSource = dataSource;
         _embeddings = embeddings;
         _reranker = reranker;
+        _session = session;
         _options = options.Value;
+        _demo = demo.Value;
     }
 
     public async Task<RerankComparison> CompareAsync(string question, CancellationToken cancellationToken = default)
@@ -76,16 +82,21 @@ public sealed class RerankDiagnosticsService : IRerankDiagnostics
     private async Task<IReadOnlyList<SourcedCandidate>> SearchWithSourceAsync(
         float[] queryEmbedding, int topK, CancellationToken cancellationToken)
     {
+        // Session izolasyonu: yalnızca kullanıcının kendi + seed chunk'ları.
+        var sessions = Application.Sessions.SessionScope.Allowed(_session.SessionId, _demo.SeedSessionId);
+
         const string sql = """
             SELECT c.id, c.content, d.file_name, 1 - (c.embedding <=> @query) AS score
             FROM chunks c
             JOIN documents d ON d.id = c.document_id
+            WHERE c.session_id = ANY(@sessions)
             ORDER BY c.embedding <=> @query
             LIMIT @topk
             """;
 
         await using var cmd = _dataSource.CreateCommand(sql);
         cmd.Parameters.AddWithValue("query", new Pgvector.Vector(queryEmbedding));
+        cmd.Parameters.AddWithValue("sessions", sessions);
         cmd.Parameters.AddWithValue("topk", topK);
 
         var list = new List<SourcedCandidate>(topK);

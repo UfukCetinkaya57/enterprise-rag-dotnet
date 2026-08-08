@@ -4,6 +4,7 @@ using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
 using KurumsalRAG.Infrastructure.Agents;
 using KurumsalRAG.Infrastructure.Configuration;
+using KurumsalRAG.Infrastructure.Hosting;
 using KurumsalRAG.Infrastructure.Ingestion;
 using KurumsalRAG.Infrastructure.Persistence;
 using KurumsalRAG.Infrastructure.Providers.OpenAi;
@@ -34,6 +35,7 @@ public static class DependencyInjection
         services.Configure<RagOptions>(configuration.GetSection(RagOptions.SectionName));
         services.Configure<OpenAiOptions>(configuration.GetSection(OpenAiOptions.SectionName));
         services.Configure<PostgresOptions>(configuration.GetSection(PostgresOptions.SectionName));
+        services.Configure<DemoOptions>(configuration.GetSection(DemoOptions.SectionName));
 
         // ChunkingOptions'ı doğrudan enjekte edilebilir yap (TextChunker için).
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<RagOptions>>().Value.Chunking);
@@ -62,6 +64,15 @@ public static class DependencyInjection
         services.AddScoped<IDocumentIngestionService, DocumentIngestionService>();
         services.AddScoped<IRagQueryService, RagQueryService>();
         services.AddScoped<IRerankDiagnostics, RerankDiagnosticsService>();
+
+        // --- Demo zırhı adapter'ları (hepsi pgvector deposunu paylaşır) ---
+        services.AddScoped<IResponseCache, PgResponseCache>();
+        services.AddScoped<ITokenBudgetGuard, PgTokenBudgetStore>();
+        services.AddScoped<ISessionQuota, PgSessionQuota>();
+
+        // --- Arka plan servisleri: seed ingest + TTL temizliği ---
+        services.AddHostedService<SeedDocumentInitializer>();
+        services.AddHostedService<DocumentTtlCleanupService>();
 
         // --- Reranker: Faz 2'de LLM tabanlı (PassThroughReranker yerine).
         // Cross-encoder / Cohere Rerank'e geçişte sadece bu satır değişir. ---

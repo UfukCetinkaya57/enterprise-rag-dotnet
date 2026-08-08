@@ -1,18 +1,24 @@
 using System.Text;
+using System.Text.Json;
+using KurumsalRAG.Api.RateLimiting;
 using KurumsalRAG.Application.Abstractions;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace KurumsalRAG.Api.Controllers;
 
 [ApiController]
 [Route("api/chat")]
+[EnableRateLimiting(RateLimitPolicies.Queries)]
 public sealed class ChatController : ControllerBase
 {
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
     private readonly IRagQueryService _rag;
 
     public ChatController(IRagQueryService rag) => _rag = rag;
 
-    /// <summary>Non-stream: soruya kaynak-atıflı tek JSON cevap döner.</summary>
+    /// <summary>Non-stream: soruya kaynak-atıflı tek JSON cevap döner (cached/limited dahil).</summary>
     [HttpPost]
     public async Task<IActionResult> Ask([FromBody] ChatRequest request, CancellationToken cancellationToken)
     {
@@ -23,7 +29,7 @@ public sealed class ChatController : ControllerBase
         return Ok(answer);
     }
 
-    /// <summary>SSE: cevabı token token stream eder (text/event-stream).</summary>
+    /// <summary>SSE: status → token'lar → meta (kaynak + groundedness) → done.</summary>
     [HttpGet("stream")]
     public async Task Stream([FromQuery] string question, CancellationToken cancellationToken)
     {
@@ -37,8 +43,29 @@ public sealed class ChatController : ControllerBase
             return;
         }
 
-        await foreach (var token in _rag.StreamAsync(question, cancellationToken))
-            await WriteEventAsync("token", token, cancellationToken);
+        await foreach (var chunk in _rag.StreamAsync(question, cancellationToken))
+        {
+            switch (chunk.Kind)
+            {
+                case "status":
+                    await WriteEventAsync("status",
+                        JsonSerializer.Serialize(new { type = chunk.Token }, Json), cancellationToken);
+                    break;
+                case "token":
+                    await WriteEventAsync("token", chunk.Token ?? string.Empty, cancellationToken);
+                    break;
+                case "final" when chunk.Final is not null:
+                    await WriteEventAsync("meta", JsonSerializer.Serialize(new
+                    {
+                        type = chunk.Final.Type.ToString(),
+                        cached = chunk.Final.Cached,
+                        limited = chunk.Final.Limited,
+                        sources = chunk.Final.Sources,
+                        faithfulnessScore = chunk.Final.Observability.FaithfulnessScore
+                    }, Json), cancellationToken);
+                    break;
+            }
+        }
 
         await WriteEventAsync("done", "[DONE]", cancellationToken);
     }
