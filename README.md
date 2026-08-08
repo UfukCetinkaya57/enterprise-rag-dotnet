@@ -104,9 +104,15 @@ cp .env.example .env
 # 2) pgvector'ı ayağa kaldır — extension + şema + HNSW index otomatik kurulur (db/init.sql)
 docker compose up -d
 
-# 3) API'yi çalıştır
+# 3) API'yi çalıştır (startup'ta örnek seed doküman otomatik ingest edilir)
 dotnet run --project src/KurumsalRAG.Api
+
+# 4) Tarayıcıda demo arayüzü: http://localhost:5264/
+#    (seed doküman yüklü — hemen soru sorabilirsiniz)
 ```
+
+> Şema güncellendiyse (session_id kolonları, cache/usage tabloları) mevcut volume'ü sıfırlayın:
+> `docker compose down -v && docker compose up -d`.
 
 ### Örnek istekler
 
@@ -170,6 +176,52 @@ curl -N "http://localhost:5264/api/chat/stream?question=Ev%20ofisi%20ekipman%20d
   bölgesine veya tamamen on-prem Ollama'ya taşınabilir — veri-ikameti senaryosu için hazır.
 - **Groundedness denetimi.** Faithfulness checker hallucination'ı yakalar; düşük skorlu
   cevaplar reflection'a girer ya da uyarıyla işaretlenir.
+
+---
+
+## Production considerations (live demo)
+
+Depo herkese açık, anonim bir canlı demo olarak yayımlanabilir. Aşağıdaki zırh, kötüye
+kullanımı ve maliyeti sınırlarken Clean Architecture'ı bozmaz — her biri bir **port**
+arkasında, davranış `appsettings` "Demo" bölümünden ayarlanır.
+
+| Karar | Ne yapar | Gerekçe |
+|---|---|---|
+| **Session izolasyonu** | httpOnly cookie ile anonim session; her chunk `session_id` ile etiketlenir. Retrieval yalnızca kullanıcının kendi + `seed` chunk'larını görür. | Bir kullanıcının yüklediği doküman başka kullanıcıya sızmaz. Cookie httpOnly (XSS'e karşı JS erişemez). |
+| **Seed doküman** | Startup'ta kurgusal bir şirket politikası PDF'i `session_id='seed'` ile ingest edilir. | Demo kullanıcısı hiçbir şey yüklemeden hemen soru sorabilir. |
+| **Doküman TTL** | Saatlik `BackgroundService`, seed hariç 24 saatten eski dokümanları siler. | Public demoda veri birikmesini ve kalıcı depolama yükünü önler. |
+| **Günlük token bütçesi** | `daily_usage` tablosunda restart-dayanıklı sayaç. Aşımda LLM çağrılmaz; nazik "limited" cevabı. | OpenAI maliyet tavanı — kötüye kullanım faturayı patlatamaz. |
+| **Kill switch** | `Demo:Enabled=false` → tüm chat uçları "limited" döner. | Sorun anında tek konfigürasyonla üretimi durdurma. |
+| **IP kotaları** | .NET yerleşik rate limiting: IP başına günlük sorgu (30) ve upload (3). `ForwardedHeaders` ile Nginx arkasında gerçek IP. | Tek bir IP'nin servisi tüketmesini engeller. |
+| **Session kotaları** | Session başına en fazla 2 doküman, toplam 20 MB. | Depolama ve embedding maliyetini kullanıcı başına sınırlar. |
+| **Yanıt cache'i** | `(session + normalize soru)` anahtarı, DB tablosu, TTL 24s. Hit'te LLM'e gidilmez; cevap `cached` işaretlenir. | Tekrarlı sorularda gecikmeyi ve maliyeti düşürür. |
+| **Upload sertleştirme** | `application/pdf` + magic-byte (`%PDF-`), 10 MB, 50 sayfa sınırı. | Sahte/zararlı dosya ve kaynak tüketimini engeller. |
+| **Global hata yönetimi** | `IExceptionHandler` + ProblemDetails; stack trace kullanıcıya sızmaz. | Bilgi sızıntısını önler, kullanıcı-dostu mesaj verir. |
+
+**Yeni portlar (Application) → adapter (Infrastructure):** `ISessionAccessor` → `HttpSessionAccessor`
+(Api), `IResponseCache` → `PgResponseCache`, `ITokenBudgetGuard` → `PgTokenBudgetStore`,
+`ISessionQuota` → `PgSessionQuota`. Cache'i Redis'e taşımak = tek adapter değişikliği.
+
+**Yapılandırma (`appsettings.json` → `Demo`):**
+
+```jsonc
+"Demo": {
+  "Enabled": true,              // kill switch
+  "SeedSessionId": "seed",
+  "DailyTokenBudget": 200000,   // günlük global token tavanı
+  "DocumentTtlHours": 24,
+  "Ip":      { "QueriesPerDay": 30, "UploadsPerDay": 3 },
+  "Session": { "MaxDocuments": 2, "MaxTotalBytes": 20971520 },
+  "Cache":   { "TtlHours": 24 },
+  "Upload":  { "MaxBytes": 10485760, "MaxPages": 50 }
+}
+```
+
+**Bilinen sınırlamalar:** Rate limiter penceresi süreç-içi (in-memory) tutulur; süreç
+yeniden başlarsa IP pencereleri sıfırlanır (token bütçesi ise DB'de kalıcıdır). Token/maliyet
+tahmini stream yolunda karakter-tabanlı kestirimdir (SK usage döndürmez); non-stream yolda
+gerçek OpenAI usage kullanılır. Session anonim cookie tabanlıdır; cookie silinirse yeni session
+başlar (kimlik doğrulama yoktur — demo amaçlıdır).
 
 ---
 
