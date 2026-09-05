@@ -1,11 +1,17 @@
+using KurumsalRAG.Api.Filters;
 using KurumsalRAG.Application.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace KurumsalRAG.Api.Controllers;
 
-/// <summary>Demo/gözlem uçları. Rerank'in retrieval kalitesine katkısını görünür kılar.</summary>
+/// <summary>
+/// Demo/gözlem uçları. Rerank'in retrieval kalitesine katkısını görünür kılar.
+/// LLM çağırdıkları ve token bütçesi dışında oldukları için Production'da
+/// (Demo:DiagnosticsEnabled=false) kapalıdır — <see cref="DiagnosticsGateAttribute"/> 404 döner.
+/// </summary>
 [ApiController]
 [Route("api/diagnostics")]
+[DiagnosticsGate]
 public sealed class DiagnosticsController : ControllerBase
 {
     private readonly IRerankDiagnostics _rerankDiagnostics;

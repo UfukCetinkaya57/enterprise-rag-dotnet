@@ -54,6 +54,8 @@ public static class DependencyInjection
             .AddPolicyHandler(RetryPolicy());
         services.AddHttpClient<ILlmProvider, OpenAiLlmProvider>(ConfigureOpenAiClient)
             .AddPolicyHandler(RetryPolicy());
+        // Derin health probe: /models pingi (token harcamaz). Kendi auth'unu içinde kurar.
+        services.AddHttpClient<IProviderHealthProbe, OpenAiHealthProbe>();
 
         // --- Ingestion bileşenleri ---
         services.AddSingleton<PdfTextExtractor>();
@@ -69,6 +71,8 @@ public static class DependencyInjection
         services.AddScoped<IResponseCache, PgResponseCache>();
         services.AddScoped<ITokenBudgetGuard, PgTokenBudgetStore>();
         services.AddScoped<ISessionQuota, PgSessionQuota>();
+        // IP rate limiter: restart-dayanıklı (DB). In-memory FixedWindow yerine.
+        services.AddScoped<IIpRateLimiter, PgIpRateLimiter>();
 
         // --- Arka plan servisleri: seed ingest + TTL temizliği ---
         services.AddHostedService<SeedDocumentInitializer>();

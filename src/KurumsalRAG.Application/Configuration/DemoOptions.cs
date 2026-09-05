@@ -14,6 +14,12 @@ public sealed class DemoOptions
     /// <summary>Örnek (seed) dokümanların session kimliği. Retrieval her session'a ek olarak bunu görür.</summary>
     public string SeedSessionId { get; init; } = "seed";
 
+    /// <summary>
+    /// /api/diagnostics/* uçları etkin mi. Production'da FALSE olmalı: bu uçlar LLM çağırır
+    /// ve token bütçesi/kotalar dışındadır — public'te token yakma vektörüdür.
+    /// </summary>
+    public bool DiagnosticsEnabled { get; init; } = true;
+
     /// <summary>Startup'ta bir kez ingest edilecek örnek doküman etkin mi.</summary>
     public bool SeedEnabled { get; init; } = true;
 
