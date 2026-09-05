@@ -93,7 +93,19 @@ public sealed class RagQueryService : IRagQueryService
         var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, cancellationToken);
         var messages = RagPromptBuilder.Build(guard.SanitizedInput, context);
 
-        var completion = await _llm.CompleteAsync(messages, cancellationToken);
+        LlmCompletion completion;
+        try
+        {
+            completion = await _llm.CompleteAsync(messages, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Sağlayıcı hatası (ör. Gemini 429) — 500 yerine nazik "limited" cevabı.
+            _logger.LogWarning(ex, "LLM çağrısı başarısız; nazik limited cevabı dönülüyor.");
+            return new RagAnswer(
+                "Şu anda yoğunluk var (ücretsiz kota sınırı). Lütfen birazdan tekrar deneyin.",
+                [], new RagObservability(0, 0, 0, 0), AnswerType.Limited);
+        }
 
         double? faithfulnessScore = null;
         if (_options.Faithfulness.Enabled && !context.IsEmpty)
@@ -168,11 +180,50 @@ public sealed class RagQueryService : IRagQueryService
         yield return RagStreamChunk.Status(AnswerType.Normal);
 
         // Token'ları akıtırken tam cevabı biriktir (sonra faithfulness + cache için).
+        // LLM stream'i hata verirse (ör. Gemini 429) manuel enumerate ile YAKALA:
+        // yield'li metotta try/catch mümkün değil, bu yüzden enumerator elle sürülür.
         var full = new StringBuilder();
-        await foreach (var token in _llm.StreamAsync(messages, cancellationToken))
+        var enumerator = _llm.StreamAsync(messages, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        try
         {
-            full.Append(token);
-            yield return RagStreamChunk.TokenChunk(token);
+            while (true)
+            {
+                string token;
+                var failed = false;
+                try
+                {
+                    if (!await enumerator.MoveNextAsync())
+                        break;
+                    token = enumerator.Current;
+                }
+                catch (Exception ex)
+                {
+                    // yield catch içinde olamaz — hatayı işaretle, catch dışında ele al.
+                    _logger.LogWarning(ex, "LLM stream hatası (ör. 429); nazik mesaj gönderilecek.");
+                    failed = true;
+                    token = string.Empty;
+                }
+
+                if (failed)
+                {
+                    var msg = full.Length == 0
+                        ? "Şu anda yoğunluk var (ücretsiz kota sınırı). Lütfen birazdan tekrar deneyin."
+                        : "\n\n(Yanıtın kalanı alınamadı — ücretsiz kota sınırı. Lütfen birazdan tekrar deneyin.)";
+                    yield return RagStreamChunk.TokenChunk(msg);
+                    yield return RagStreamChunk.FinalChunk(new RagAnswer(
+                        full + msg, sources,
+                        new RagObservability(_options.Retrieval.TopK, sources.Count, 0, 0),
+                        AnswerType.Limited));
+                    yield break;
+                }
+
+                full.Append(token);
+                yield return RagStreamChunk.TokenChunk(token);
+            }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
         }
 
         var answer = full.ToString();

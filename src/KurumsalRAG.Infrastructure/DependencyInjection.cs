@@ -104,9 +104,15 @@ public static class DependencyInjection
         services.AddHostedService<SeedDocumentInitializer>();
         services.AddHostedService<DocumentTtlCleanupService>();
 
-        // --- Reranker: Faz 2'de LLM tabanlı (PassThroughReranker yerine).
-        // Cross-encoder / Cohere Rerank'e geçişte sadece bu satır değişir. ---
-        services.AddScoped<IReranker, LlmReranker>();
+        // --- Reranker: config'ten (Rag:Retrieval:RerankerType).
+        // "Hybrid" (cosine+keyword, LLM çağrısı YOK — free-tier dostu) veya "Llm" (kaliteli).
+        // Cross-encoder / Cohere Rerank'e geçişte yine bu port'un arkası değişir. ---
+        var rerankerType = configuration
+            .GetSection(RagOptions.SectionName).GetSection("Retrieval")["RerankerType"] ?? "Llm";
+        if (string.Equals(rerankerType, "Hybrid", StringComparison.OrdinalIgnoreCase))
+            services.AddScoped<IReranker, HybridReranker>();
+        else
+            services.AddScoped<IReranker, LlmReranker>();
 
         // --- Faz 4: kural tabanlı prompt injection guard (NoOp'un yerine).
         // İleride LLM-based classifier bu portun arkasına takılabilir. ---

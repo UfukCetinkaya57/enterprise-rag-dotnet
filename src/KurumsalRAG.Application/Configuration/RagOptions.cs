@@ -36,6 +36,13 @@ public sealed class RetrievalOptions
 
     /// <summary>Rerank sonrası context'e girecek chunk sayısı.</summary>
     public int TopN { get; init; } = 5;
+
+    /// <summary>
+    /// Reranker tipi: "Llm" (LLM ile yeniden puanlama — kaliteli ama soru başına ekstra çağrı)
+    /// veya "Hybrid" (cosine + anahtar-kelime örtüşmesi — LLM çağrısı YOK, hızlı ve kotasız).
+    /// Gemini free-tier'da "Hybrid" önerilir (rate limit'i korur).
+    /// </summary>
+    public string RerankerType { get; init; } = "Llm";
 }
 
 public sealed class FaithfulnessOptions
