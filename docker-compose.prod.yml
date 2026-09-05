@@ -15,7 +15,9 @@ services:
     # ports YOK: DB dışarı açılmaz. API aynı ağdan 'postgres' host'uyla erişir.
     volumes:
       - ragprod_pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # NOT: Şema artık uygulama tarafında DatabaseInitializer ile (provider'a göre
+      # doğru embedding boyutunda: OpenAI=1536, Gemini=768) oluşturulur.
+      # Sabit boyutlu db/init.sql MOUNT EDİLMEZ — aksi halde boyut çakışır.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag} -d ${POSTGRES_DB:-kurumsalrag}"]
       interval: 10s
@@ -35,7 +37,11 @@ services:
         condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY zorunlu}
+      # Provider seçimi: "Gemini" (varsayılan, ücretsiz) veya "OpenAI".
+      Ai__Provider: ${Ai__Provider:-Gemini}
+      # Her iki key de opsiyonel — hangi provider seçiliyse onunki dolu olmalı.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_DB: ${POSTGRES_DB:-kurumsalrag}

@@ -69,6 +69,10 @@ static void BindSecretsFromEnvironment(WebApplicationBuilder builder)
     if (!string.IsNullOrWhiteSpace(openAiKey))
         builder.Configuration[$"{OpenAiOptions.SectionName}:ApiKey"] = openAiKey;
 
+    var geminiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+    if (!string.IsNullOrWhiteSpace(geminiKey))
+        builder.Configuration[$"{GeminiOptions.SectionName}:ApiKey"] = geminiKey;
+
     var host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost";
     var port = Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432";
     var db = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "kurumsalrag";
