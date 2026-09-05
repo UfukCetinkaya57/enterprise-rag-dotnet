@@ -225,6 +225,108 @@ başlar (kimlik doğrulama yoktur — demo amaçlıdır).
 
 ---
 
+## Deployment (rag.ufukcetinkaya.com)
+
+Hedef: Ubuntu + Nginx (üzerinde **başka siteler de barınıyor** — bu kurulum onlara
+dokunmaz; `rag.ufukcetinkaya.com` için **ayrı** bir Nginx server bloğu ekler).
+
+**Mimari:** İnternet → Nginx (443, TLS) → `127.0.0.1:8092` (Docker: API) → `postgres` (Docker, dışarı kapalı).
+
+### Ön koşullar
+- Sunucuda Docker + Docker Compose, Nginx, certbot (`sudo apt install certbot`).
+- **DNS:** `rag.ufukcetinkaya.com` A kaydı sunucunun public IP'sine (bunu sen giriyorsun).
+- Port **8092** sunucuda boş olmalı (aşağıda kontrol var). Doluysa: `.env.prod`'daki
+  `API_PORT` + `deploy/nginx/rag.ufukcetinkaya.com.conf`'daki upstream portunu birlikte değiştir.
+
+### Sunucuda çalıştırılacak komutlar (sırayla)
+
+```bash
+# 0) DNS'in yayıldığını doğrula (sunucu IP'sini göstermeli)
+dig +short rag.ufukcetinkaya.com
+
+# 1) Portun boş olduğunu kontrol et (çıktı BOŞ olmalı)
+sudo ss -ltnp | grep ':8092' || echo "8092 boş"
+
+# 2) Repoyu al
+git clone https://github.com/UfukCetinkaya57/enterprise-rag-dotnet.git
+cd enterprise-rag-dotnet
+
+# 3) Prod secret'ları hazırla
+cp .env.prod.example .env.prod
+nano .env.prod   # OPENAI_API_KEY ve güçlü POSTGRES_PASSWORD gir (.env.prod git-ignored)
+
+# 4) API + pgvector'ı ayağa kaldır (ilk kurulumda ŞEMA yeni → temiz volume otomatik oluşur)
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env.prod ps
+curl -s http://127.0.0.1:8092/health          # → Healthy
+
+# 5) Nginx: certbot webroot dizini + config'i kopyala
+sudo mkdir -p /var/www/certbot
+sudo cp deploy/nginx/rag.ufukcetinkaya.com.conf /etc/nginx/sites-available/rag.ufukcetinkaya.com
+#    ÖNEMLİ: Sertifika henüz YOK. Dosyayı aç, "server { listen 443 ... }" bloğunun TAMAMINI
+#    geçici olarak yorum satırı yap (her satır başına #). Sadece 80 bloğu aktif kalsın:
+sudo nano /etc/nginx/sites-available/rag.ufukcetinkaya.com
+sudo ln -s /etc/nginx/sites-available/rag.ufukcetinkaya.com /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx     # yalnızca 80 bloğu → geçerli
+
+# 6) Let's Encrypt sertifikası (webroot; Nginx'i durdurmaz, diğer siteleri etkilemez)
+sudo certbot certonly --webroot -w /var/www/certbot -d rag.ufukcetinkaya.com \
+     --agree-tos -m sunssquad988@gmail.com --no-eff-email
+
+# 7) 443 bloğunun yorumlarını KALDIR (5. adımda yorumladığın satırların başındaki #'leri sil)
+sudo nano /etc/nginx/sites-available/rag.ufukcetinkaya.com
+sudo nginx -t && sudo systemctl reload nginx     # artık TLS aktif
+
+# 8) Smoke test (dışarıdan, TLS ile)
+./deploy/smoke-test.sh                          # BASE=https://rag.ufukcetinkaya.com (varsayılan)
+```
+
+> **Not (5–7. adım):** `deploy/nginx/rag.ufukcetinkaya.com.conf` 443 bloğunu elle içerir ve
+> certbot'u yalnızca **sertifika almak** için (`certonly --webroot`) kullanır — böylece certbot
+> config'e dokunmaz, location/header'lar bizim kontrolümüzde kalır. Sertifika ilk kez alınmadan
+> önce 443 bloğu `nginx -t`'yi bozar; o yüzden sırayla önce 80, sonra sertifika, sonra 443.
+
+### Sertifika yenileme
+certbot paketi `certbot.timer`'ı otomatik kurar (günde 2 kez dener, süresi %30 kalınca yeniler).
+Yenileme sonrası Nginx'in yeni sertifikayı alması için deploy hook:
+```bash
+echo 'systemctl reload nginx' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+sudo certbot renew --dry-run     # yenileme provasını doğrula
+```
+
+### Güncelleme (yeni sürüm çıktığında)
+```bash
+cd enterprise-rag-dotnet && git pull
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# Şema DEĞİŞMEDİYSE volume korunur; değiştiyse "Bilinen riskler"e bak.
+```
+
+### Bilinen riskler ve rollback
+
+| Risk | Etki / belirti | Önlem / geri alma |
+|---|---|---|
+| **Port 8092 dolu** | API başlamaz / başka servis kırılır | 1. adımdaki `ss` kontrolü; doluysa `.env.prod` + Nginx conf'ta portu değiştir |
+| **DNS henüz yayılmadı** | certbot HTTP-01 başarısız | `dig +short` ile doğrula, yayılmayı bekle, certbot'u tekrarla |
+| **Şema değişikliği** | Yeni sürümde tablo/kolon eklenirse eski volume uyumsuz olabilir | `init.sql` yalnızca boş volume'de çalışır. Gerekirse: `docker compose -f docker-compose.prod.yml --env-file .env.prod down -v` (demo verisi silinir, seed yeniden ingest edilir) → `up -d --build` |
+| **Nginx conf hatası** | `nginx -t` fail / reload reddedilir | reload öncesi hep `nginx -t`. Bozulursa: `sudo rm /etc/nginx/sites-enabled/rag.ufukcetinkaya.com && sudo systemctl reload nginx` → **diğer siteler etkilenmeden** eski haline döner |
+| **Kötü sürüm / hatalı deploy** | API 5xx | `git checkout <önceki-tag> && docker compose ... up -d --build`; ya da anlık durdurma: `docker compose -f docker-compose.prod.yml --env-file .env.prod stop api` |
+| **Maliyet / kötüye kullanım** | Beklenmedik token harcaması | Anında kill switch: `.env.prod`'a `Demo__Enabled=false` ekle → `up -d` (tüm chat "limited" döner); günlük bütçe zaten `DailyTokenBudget` ile kaplı |
+
+**Tam geri çekilme (demo'yu kaldır, diğer siteler kalsın):**
+```bash
+sudo rm -f /etc/nginx/sites-enabled/rag.ufukcetinkaya.com && sudo systemctl reload nginx
+docker compose -f docker-compose.prod.yml --env-file .env.prod down    # -v eklemezsen veri kalır
+```
+
+### Doğrulanan güvenlik davranışları
+- Diagnostics çift katman kapalı: uygulama (Production'da `DiagnosticsEnabled=false` → 404) **+** Nginx (`/api/diagnostics` → 404).
+- `/health` sığ public; `/health?deep=true` yalnızca **loopback** (container içinden). Nginx'in arkasında dışarıdan deep çağrılamaz.
+- Rate limiter **DB tabanlı** — API restart'ında sayaç sıfırlanmaz (doğrulandı: 1→2).
+- Nginx `X-Forwarded-For` → API gerçek client IP'yi okur (doğrulandı: farklı IP'ler ayrı sayılır); `ForwardLimit=1` ile client XFF spoofing engellenir.
+
+---
+
 ## Geliştirici notu — OneDrive
 
 Depo `OneDrive\Desktop\RAG` altında. OneDrive senkronizasyonu ile git bazen `bin/`, `obj/`
