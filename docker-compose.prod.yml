@@ -56,9 +56,16 @@ services:
           memory: 512m
     networks:
       - ragnet
+      # Nginx (sanalpos-nginx) ile aynı ağ — reverse proxy 'rag-prod-api:8080'e erişsin.
+      # SUNS sunucusuna özel; başka sunucuda yoksa bu bloğu kaldırın.
+      - nginx_shared
 
 volumes:
   ragprod_pgdata:
 
 networks:
   ragnet:
+  # sanalpos-nginx'in bulunduğu, DIŞARIDA (compose dışında) tanımlı ağ.
+  nginx_shared:
+    external: true
+    name: sun_order_sanalpos-network
