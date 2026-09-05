@@ -1,16 +1,14 @@
-using KurumsalRAG.Api.RateLimiting;
 using KurumsalRAG.Api.Session;
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 namespace KurumsalRAG.Api.Controllers;
 
+// IP upload kotası yol bazlı IpRateLimitMiddleware ile uygulanır (DB, restart-dayanıklı).
 [ApiController]
 [Route("api/documents")]
-[EnableRateLimiting(RateLimitPolicies.Uploads)]
 public sealed class DocumentsController : ControllerBase
 {
     // PDF magic byte: "%PDF-"

@@ -1,7 +1,5 @@
-using System.Threading.RateLimiting;
 using KurumsalRAG.Api.Health;
 using KurumsalRAG.Api.Middleware;
-using KurumsalRAG.Api.RateLimiting;
 using KurumsalRAG.Api.Session;
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
@@ -17,8 +15,6 @@ var builder = WebApplication.CreateBuilder(args);
 // .env'den gelen secret'ları konfigürasyona bağla (appsettings'te sadece placeholder var).
 builder.Configuration.AddEnvironmentVariables();
 BindSecretsFromEnvironment(builder);
-
-var demo = builder.Configuration.GetSection(DemoOptions.SectionName).Get<DemoOptions>() ?? new DemoOptions();
 
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
@@ -36,22 +32,14 @@ builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
 // Nginx arkasında gerçek istemci IP'si için ForwardedHeaders.
+// ForwardLimit=1: yalnızca EN YAKIN proxy'ye (Nginx) güven — spoofing'i sınırlar.
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    // Demo: reverse proxy güvenilir kabul edilir (aksi halde X-Forwarded-For yok sayılırdı).
+    o.ForwardLimit = 1;
+    // Tek, bilinen reverse proxy (Nginx, container ağı) güvenilir kabul edilir.
     o.KnownNetworks.Clear();
     o.KnownProxies.Clear();
-});
-
-// IP başına rate limiting (.NET yerleşik): sorgu + upload için ayrı günlük pencereler.
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy(RateLimitPolicies.Queries, ctx =>
-        IpFixedWindow(ctx, demo.Ip.QueriesPerDay));
-    options.AddPolicy(RateLimitPolicies.Uploads, ctx =>
-        IpFixedWindow(ctx, demo.Ip.UploadsPerDay));
 });
 
 var app = builder.Build();
@@ -64,24 +52,15 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.UseMiddleware<SessionCookieMiddleware>();
-app.UseRateLimiter();
+// DB tabanlı (restart-dayanıklı) IP rate limiting — session'dan sonra, controller'dan önce.
+app.UseMiddleware<IpRateLimitMiddleware>();
 
 app.MapControllers();
-app.MapHealthChecks("/health");
+
+// Health: sığ (DB ping) public; derin (provider dahil) yalnızca localhost + ?deep=true.
+app.MapHealthEndpoint();
 
 app.Run();
-
-// IP bazlı sabit-pencere (24 saat) limiter partisyonu.
-static RateLimitPartition<string> IpFixedWindow(HttpContext ctx, int permitPerDay)
-{
-    var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-    return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
-    {
-        PermitLimit = permitPerDay,
-        Window = TimeSpan.FromDays(1),
-        QueueLimit = 0
-    });
-}
 
 // --- Yardımcı: .env değişkenlerini tipli options bölümlerine köprüle ---
 static void BindSecretsFromEnvironment(WebApplicationBuilder builder)

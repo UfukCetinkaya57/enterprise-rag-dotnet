@@ -52,3 +52,15 @@ CREATE TABLE IF NOT EXISTS daily_usage (
     usage_date  DATE PRIMARY KEY,
     tokens_used BIGINT NOT NULL DEFAULT 0
 );
+
+-- IP başına günlük istek sayaçları (restart'a dayanıklı rate limiting).
+-- scope: 'query' | 'upload'. Uygulama süreç yeniden başlasa da pencere korunur.
+CREATE TABLE IF NOT EXISTS ip_usage (
+    usage_date DATE NOT NULL,
+    ip         TEXT NOT NULL,
+    scope      TEXT NOT NULL,
+    hits       INT  NOT NULL DEFAULT 0,
+    PRIMARY KEY (usage_date, ip, scope)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ip_usage_date ON ip_usage (usage_date);

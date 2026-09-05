@@ -1,15 +1,13 @@
 using System.Text;
 using System.Text.Json;
-using KurumsalRAG.Api.RateLimiting;
 using KurumsalRAG.Application.Abstractions;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
 
 namespace KurumsalRAG.Api.Controllers;
 
+// IP rate limiting yol bazlı IpRateLimitMiddleware ile uygulanır (DB, restart-dayanıklı).
 [ApiController]
 [Route("api/chat")]
-[EnableRateLimiting(RateLimitPolicies.Queries)]
 public sealed class ChatController : ControllerBase
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
