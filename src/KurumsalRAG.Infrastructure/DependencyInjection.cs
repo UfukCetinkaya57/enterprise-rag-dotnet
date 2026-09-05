@@ -175,10 +175,13 @@ public static class DependencyInjection
         client.Timeout = TimeSpan.FromMinutes(2);
     }
 
-    /// <summary>429 (rate limit) ve geçici hatalar için üstel geri çekilmeli retry.</summary>
+    /// <summary>
+    /// Yalnızca GEÇİCİ ağ/5xx hataları için kısa retry. 429 (rate limit) DAHİL DEĞİL:
+    /// free-tier'da 429'da tekrar denemek kotayı daha da tüketir ve gecikmeyi artırır;
+    /// bunun yerine çağıran tarafta nazik "limited" mesajı gösterilir.
+    /// </summary>
     private static IAsyncPolicy<HttpResponseMessage> RetryPolicy()
         => HttpPolicyExtensions
-            .HandleTransientHttpError()
-            .OrResult(r => r.StatusCode == HttpStatusCode.TooManyRequests)
-            .WaitAndRetryAsync(3, attempt => TimeSpan.FromSeconds(Math.Pow(2, attempt)));
+            .HandleTransientHttpError() // 5xx + ağ hataları (429 hariç)
+            .WaitAndRetryAsync(2, attempt => TimeSpan.FromMilliseconds(400 * attempt));
 }
