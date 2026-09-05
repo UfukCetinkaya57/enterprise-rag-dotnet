@@ -20,7 +20,7 @@ public sealed class GeminiOptions
     public int EmbeddingDimensions { get; init; } = 768;
 
     /// <summary>Sohbet/üretim modeli (ücretsiz katman flash). gemini-2.x yeni kullanıcılara kapalı.</summary>
-    public string ChatModel { get; init; } = "gemini-3.6-flash";
+    public string ChatModel { get; init; } = "gemini-flash-lite-latest";
 
     /// <summary>Maliyet tahmini için 1M token başına USD (ücretsiz katmanda 0).</summary>
     public PricingOptions Pricing { get; init; } = new();
