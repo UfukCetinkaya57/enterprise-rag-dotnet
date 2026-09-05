@@ -240,51 +240,45 @@ dokunmaz; `rag.ufukcetinkaya.com` için **ayrı** bir Nginx server bloğu ekler)
 
 ### Sunucuda çalıştırılacak komutlar (sırayla)
 
+`deploy/server-deploy.sh` aşamalı ve **kendi kendini korur**: her nginx reload öncesi
+`nginx -t` çalıştırır, BAŞARISIZ olursa yeni symlink'i siler ve durur — mevcut siteler
+etkilenmez. Sertifika, iki conf ile alınır: önce sadece-80 (`rag.http-only.conf`) ile ACME,
+sonra tam conf (80+443). Böylece ilk `nginx -t` sertifika referansı olmadan geçer.
+
 ```bash
-# 0) DNS'in yayıldığını doğrula (sunucu IP'sini göstermeli)
-dig +short rag.ufukcetinkaya.com
-
-# 1) Portun boş olduğunu kontrol et (çıktı BOŞ olmalı)
-sudo ss -ltnp | grep ':8092' || echo "8092 boş"
-
-# 2) Repoyu al
+# 0) Repoyu al
 git clone https://github.com/UfukCetinkaya57/enterprise-rag-dotnet.git
 cd enterprise-rag-dotnet
 
-# 3) Prod secret'ları hazırla
+# 1) Ön kontrol: DNS, port 8092, mevcut nginx sağlığı, container'lar
+sudo DOMAIN=rag.ufukcetinkaya.com bash deploy/server-deploy.sh preflight
+
+# 2) Prod secret'ları hazırla — SADECE bu satırı sen doldur:
 cp .env.prod.example .env.prod
-nano .env.prod   # OPENAI_API_KEY ve güçlü POSTGRES_PASSWORD gir (.env.prod git-ignored)
+nano .env.prod
+#   OPENAI_API_KEY=sk-...            (gerçek OpenAI anahtarın)
+#   POSTGRES_PASSWORD=...            (güçlü bir parola)
+#   (.env.prod git-ignored — commit'lenmez)
 
-# 4) API + pgvector'ı ayağa kaldır (ilk kurulumda ŞEMA yeni → temiz volume otomatik oluşur)
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-docker compose -f docker-compose.prod.yml --env-file .env.prod ps
-curl -s http://127.0.0.1:8092/health          # → Healthy
+# 3) Container: build + up + yerel health + dışarıdan erişilemezlik kontrolü
+sudo DOMAIN=rag.ufukcetinkaya.com bash deploy/server-deploy.sh app
 
-# 5) Nginx: certbot webroot dizini + config'i kopyala
-sudo mkdir -p /var/www/certbot
-sudo cp deploy/nginx/rag.ufukcetinkaya.com.conf /etc/nginx/sites-available/rag.ufukcetinkaya.com
-#    ÖNEMLİ: Sertifika henüz YOK. Dosyayı aç, "server { listen 443 ... }" bloğunun TAMAMINI
-#    geçici olarak yorum satırı yap (her satır başına #). Sadece 80 bloğu aktif kalsın:
-sudo nano /etc/nginx/sites-available/rag.ufukcetinkaya.com
-sudo ln -s /etc/nginx/sites-available/rag.ufukcetinkaya.com /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx     # yalnızca 80 bloğu → geçerli
+# 4) Nginx (yalnızca 80 + ACME) → nginx -t + reload (fail olursa symlink silinir + DUR)
+sudo DOMAIN=rag.ufukcetinkaya.com bash deploy/server-deploy.sh nginx-http
 
-# 6) Let's Encrypt sertifikası (webroot; Nginx'i durdurmaz, diğer siteleri etkilemez)
-sudo certbot certonly --webroot -w /var/www/certbot -d rag.ufukcetinkaya.com \
-     --agree-tos -m sunssquad988@gmail.com --no-eff-email
+# 5) TLS sertifikası (webroot; nginx'i durdurmaz, diğer siteleri etkilemez)
+sudo DOMAIN=rag.ufukcetinkaya.com EMAIL=SENIN_EPOSTAN bash deploy/server-deploy.sh cert
 
-# 7) 443 bloğunun yorumlarını KALDIR (5. adımda yorumladığın satırların başındaki #'leri sil)
-sudo nano /etc/nginx/sites-available/rag.ufukcetinkaya.com
-sudo nginx -t && sudo systemctl reload nginx     # artık TLS aktif
+# 6) Nginx (tam conf: 80→443 + TLS reverse proxy) → nginx -t + reload
+sudo DOMAIN=rag.ufukcetinkaya.com bash deploy/server-deploy.sh nginx-tls
 
-# 8) Smoke test (dışarıdan, TLS ile)
-./deploy/smoke-test.sh                          # BASE=https://rag.ufukcetinkaya.com (varsayılan)
+# 7) Smoke test (dışarıdan, TLS ile) → 6/6 geçmeli
+sudo DOMAIN=rag.ufukcetinkaya.com bash deploy/server-deploy.sh smoke
 ```
 
-> **Not (5–7. adım):** `deploy/nginx/rag.ufukcetinkaya.com.conf` 443 bloğunu elle içerir ve
-> certbot'u yalnızca **sertifika almak** için (`certonly --webroot`) kullanır — böylece certbot
-> config'e dokunmaz, location/header'lar bizim kontrolümüzde kalır. Sertifika ilk kez alınmadan
-> önce 443 bloğu `nginx -t`'yi bozar; o yüzden sırayla önce 80, sonra sertifika, sonra 443.
+> **certbot yaklaşımı:** `certonly --webroot` — certbot yalnızca sertifika alır, Nginx
+> config'ine DOKUNMAZ; location/header'lar bizim kontrolümüzde kalır. `nginx-tls` aşaması
+> ayrıca sertifika yenileme sonrası otomatik `systemctl reload nginx` hook'unu kurar.
 
 ### Sertifika yenileme
 certbot paketi `certbot.timer`'ı otomatik kurar (günde 2 kez dener, süresi %30 kalınca yeniler).

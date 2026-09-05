@@ -1,0 +1,7 @@
+# Linux sunucuda çalışacak dosyalar DAİMA LF olsun (CRLF → bash/nginx hatası).
+*.sh            text eol=lf
+deploy/**       text eol=lf
+Dockerfile      text eol=lf
+docker-compose*.yml text eol=lf
+db/*.sql        text eol=lf
+*.conf          text eol=lf
