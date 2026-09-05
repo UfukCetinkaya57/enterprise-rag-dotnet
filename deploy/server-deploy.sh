@@ -20,7 +20,17 @@ set -euo pipefail
 DOMAIN="${DOMAIN:-rag.ufukcetinkaya.com}"
 EMAIL="${EMAIL:-}"
 API_PORT="${API_PORT:-8092}"
-COMPOSE="docker compose -f docker-compose.prod.yml --env-file .env.prod"
+
+# Docker Compose v2 (docker compose) yoksa v1 (docker-compose) kullan — sunucuya göre otomatik.
+if docker compose version >/dev/null 2>&1; then
+  DC="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+  DC="docker-compose"
+else
+  echo "DUR: Docker Compose bulunamadı (ne 'docker compose' ne 'docker-compose')." >&2
+  exit 1
+fi
+COMPOSE="$DC -f docker-compose.prod.yml --env-file .env.prod"
 AVAIL="/etc/nginx/sites-available/${DOMAIN}"
 LINK="/etc/nginx/sites-enabled/${DOMAIN}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
