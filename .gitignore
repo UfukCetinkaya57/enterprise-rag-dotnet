@@ -1,7 +1,9 @@
-# Secrets — ASLA commit'lenmez
+# Secrets — ASLA commit'lenmez (.env, .env.prod, .env.local ...)
 .env
+.env.*
 *.env
 !.env.example
+!.env.prod.example
 
 # .NET build çıktıları
 bin/

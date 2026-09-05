@@ -1,0 +1,17 @@
+# Build çıktıları ve yerel dosyalar image'a girmesin
+**/bin/
+**/obj/
+.git/
+.github/
+tests/
+*.md
+.env
+.env.*
+!/.env.prod.example
+docker-compose*.yml
+Dockerfile
+.dockerignore
+.vs/
+.idea/
+.vscode/
+samples/

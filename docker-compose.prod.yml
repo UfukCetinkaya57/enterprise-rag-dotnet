@@ -1,0 +1,58 @@
+# Production compose: API (Docker) + pgvector.
+# API SADECE 127.0.0.1:${API_PORT}'a bağlanır — dışarıya yalnızca Nginx açar.
+# pgvector portu HİÇ yayımlanmaz (yalnızca internal Docker ağı).
+# Çalıştırma: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag-prod-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kurumsalrag}
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}
+    # ports YOK: DB dışarı açılmaz. API aynı ağdan 'postgres' host'uyla erişir.
+    volumes:
+      - ragprod_pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag} -d ${POSTGRES_DB:-kurumsalrag}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ragnet
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-prod-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY zorunlu}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-kurumsalrag}
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}
+    # Yalnızca loopback'e bind — dışarıdan doğrudan erişilemez, sadece Nginx proxy'ler.
+    ports:
+      - "127.0.0.1:${API_PORT:-8092}:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    networks:
+      - ragnet
+
+volumes:
+  ragprod_pgdata:
+
+networks:
+  ragnet:
