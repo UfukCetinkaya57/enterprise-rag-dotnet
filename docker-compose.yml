@@ -10,8 +10,8 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # İlk açılışta extension + şema + HNSW index otomatik kurulur.
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # NOT: Şema artık uygulama tarafında DatabaseInitializer ile (seçili sağlayıcının
+      # embedding boyutunda) oluşturulur. Sabit boyutlu init.sql mount EDİLMEZ.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag} -d ${POSTGRES_DB:-kurumsalrag}"]
       interval: 5s

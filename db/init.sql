@@ -1,6 +1,7 @@
--- Container ilk açılışında bir kez çalışır (docker-entrypoint-initdb.d).
--- pgvector extension + şema + HNSW index + demo zırhı tabloları.
--- NOT: init.sql yalnızca BOŞ volume'de çalışır. Şema değiştiyse: docker compose down -v.
+-- ⚠️ ARTIK KULLANILMIYOR (referans/tarihçe amaçlı tutuluyor).
+-- Şema uygulama tarafında DatabaseInitializer ile oluşturulur — embedding kolonu
+-- SEÇİLİ SAĞLAYICININ boyutunda kurulur (OpenAI=1536, Gemini=768). Bu dosya sabit 1536
+-- içerdiği için compose'larda MOUNT EDİLMEZ. Aşağısı yalnızca şemanın belgesidir.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
