@@ -40,11 +40,14 @@
   .answer{white-space:pre-wrap;font-size:15.5px;min-height:22px}
   .answer .cite{color:var(--accent);font-weight:600}
   .sources{margin-top:14px;border-top:1px solid var(--border);padding-top:12px}
-  .sources h3{font-size:13px;color:var(--muted);margin:0 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  .sources h3{font-size:13px;color:var(--muted);margin:0 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  .sources .hint{font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.45}
   .src{background:var(--panel2);border:1px solid var(--border);border-radius:8px;
-    padding:8px 10px;font-size:13px;margin-bottom:6px;display:flex;justify-content:space-between;gap:10px}
-  .src .ref{color:var(--accent);font-weight:600}
-  .src .score{color:var(--muted);font-variant-numeric:tabular-nums}
+    padding:8px 10px;font-size:13px;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+  .src .ref{color:var(--accent);font-weight:600;flex-shrink:0;min-width:74px}
+  .src .bar{flex:1;height:6px;background:var(--border);border-radius:999px;overflow:hidden}
+  .src .bar > i{display:block;height:100%;background:var(--accent);border-radius:999px}
+  .src .pct{color:var(--muted);font-variant-numeric:tabular-nums;flex-shrink:0;min-width:64px;text-align:right}
   .up{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .up label{font-size:13.5px;color:var(--muted)}
   .up input[type=file]{font-size:13px;color:var(--muted)}
@@ -86,6 +89,9 @@
     <div class="answer" id="answer"></div>
     <div class="sources" id="sources" style="display:none">
       <h3>Kaynak parçalar</h3>
+      <p class="hint">Cevap, dokümanın bu parçalarına dayanıyor. Cevaptaki
+        <span style="color:var(--accent);font-weight:600">[chunk:N]</span> etiketi, o cümlenin
+        hangi parçadan geldiğini gösterir. Yüzde, parçanın sorunuzla ne kadar alakalı olduğudur.</p>
       <div id="srcList"></div>
     </div>
   </div>
@@ -130,10 +136,12 @@ function renderSources(list){
   if (!list || !list.length){ sourcesEl.style.display='none'; return; }
   srcList.innerHTML = '';
   for (const s of list){
+    const pct = Math.max(0, Math.min(100, Math.round(Number(s.score) * 100)));
     const row = document.createElement('div');
     row.className = 'src';
     row.innerHTML = `<span class="ref">[chunk:${s.reference}]</span>`
-      + `<span class="score">skor ${Number(s.score).toFixed(3)}</span>`;
+      + `<span class="bar"><i style="width:${pct}%"></i></span>`
+      + `<span class="pct">%${pct} alaka</span>`;
     srcList.appendChild(row);
   }
   sourcesEl.style.display = 'block';
