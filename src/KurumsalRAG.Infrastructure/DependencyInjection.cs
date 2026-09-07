@@ -186,24 +186,28 @@ public static class DependencyInjection
     /// Neden per-attempt timeout: Gemini bazen 503'ü ~20sn bekleterek döner. Timeout'suz
     /// iki retry, 20+9sn'ye şişip kullanıcının ~30sn'lik client timeout'una takılıyordu
     /// (chat hang → boş cevap). Her denemeyi <see cref="AttemptTimeoutSeconds"/> ile
-    /// kesip hızlıca sıradaki denemeye/nazik hataya geçiyoruz. Toplam en kötü süre
-    /// ≈ 3×8 + backoff ≈ 25sn &lt; client timeout, ama tek yavaş 503 artık 20sn asmıyor.
+    /// kesip nazik "limited" hatasına geçiyoruz.
+    ///
+    /// Retry sayısı DÜŞÜK bilinçli: free-tier 503'ü (model yoğunluğu) anlık olduğunda
+    /// çok denemek her denemede timeout'u dolduruyor (kullanıcı 25sn+ bekliyor). 1 retry
+    /// yeterli — geçici tekleme kurtulur, kalıcı yoğunlukta hızlıca teslim olup nazik
+    /// cevabı döneriz. En kötü süre ≈ 2×6 + backoff ≈ 13sn &lt; client timeout.
     /// </summary>
-    private const int AttemptTimeoutSeconds = 8;
+    private const int AttemptTimeoutSeconds = 6;
 
     private static IAsyncPolicy<HttpResponseMessage> RetryPolicy()
     {
-        // İçte: her bir denemeyi 8sn'de kes (optimistic — yavaş 503'ü retry'a çeviririz).
+        // İçte: her bir denemeyi 6sn'de kes (yavaş 503'ü asma; retry'a/nazik hataya çevir).
         var perAttemptTimeout = Policy.TimeoutAsync<HttpResponseMessage>(
             TimeSpan.FromSeconds(AttemptTimeoutSeconds));
 
-        // Dışta: geçici 5xx/ağ hatası VEYA timeout iptalinde 2 kez daha dene.
+        // Dışta: geçici 5xx/ağ hatası VEYA timeout iptalinde 1 kez daha dene (toplam 2 deneme).
         var retry = HttpPolicyExtensions
             .HandleTransientHttpError()        // 5xx + ağ hataları (429 hariç)
             .Or<TimeoutRejectedException>()    // per-attempt timeout tetiklenince de retry et
-            .WaitAndRetryAsync(2, attempt => TimeSpan.FromMilliseconds(400 * attempt));
+            .WaitAndRetryAsync(1, _ => TimeSpan.FromMilliseconds(400));
 
-        // Wrap sırası: retry(dış) → timeout(iç). Her denemeye taze 8sn'lik timeout uygulanır.
+        // Wrap sırası: retry(dış) → timeout(iç). Her denemeye taze 6sn'lik timeout uygulanır.
         return retry.WrapAsync(perAttemptTimeout);
     }
 }
