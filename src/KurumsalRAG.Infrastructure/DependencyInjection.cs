@@ -20,6 +20,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Polly;
 using Polly.Extensions.Http;
+using Polly.Timeout;
 
 namespace KurumsalRAG.Infrastructure;
 
@@ -178,12 +179,31 @@ public static class DependencyInjection
     }
 
     /// <summary>
-    /// Yalnızca GEÇİCİ ağ/5xx hataları için kısa retry. 429 (rate limit) DAHİL DEĞİL:
-    /// free-tier'da 429'da tekrar denemek kotayı daha da tüketir ve gecikmeyi artırır;
-    /// bunun yerine çağıran tarafta nazik "limited" mesajı gösterilir.
+    /// Yalnızca GEÇİCİ ağ/5xx hataları için kısa retry + HER DENEMEYE ayrı timeout.
+    /// 429 (rate limit) retry'a DAHİL DEĞİL: free-tier'da 429'da tekrar denemek kotayı
+    /// tüketir; bunun yerine çağıran tarafta nazik "limited" mesajı gösterilir.
+    ///
+    /// Neden per-attempt timeout: Gemini bazen 503'ü ~20sn bekleterek döner. Timeout'suz
+    /// iki retry, 20+9sn'ye şişip kullanıcının ~30sn'lik client timeout'una takılıyordu
+    /// (chat hang → boş cevap). Her denemeyi <see cref="AttemptTimeoutSeconds"/> ile
+    /// kesip hızlıca sıradaki denemeye/nazik hataya geçiyoruz. Toplam en kötü süre
+    /// ≈ 3×8 + backoff ≈ 25sn &lt; client timeout, ama tek yavaş 503 artık 20sn asmıyor.
     /// </summary>
+    private const int AttemptTimeoutSeconds = 8;
+
     private static IAsyncPolicy<HttpResponseMessage> RetryPolicy()
-        => HttpPolicyExtensions
-            .HandleTransientHttpError() // 5xx + ağ hataları (429 hariç)
+    {
+        // İçte: her bir denemeyi 8sn'de kes (optimistic — yavaş 503'ü retry'a çeviririz).
+        var perAttemptTimeout = Policy.TimeoutAsync<HttpResponseMessage>(
+            TimeSpan.FromSeconds(AttemptTimeoutSeconds));
+
+        // Dışta: geçici 5xx/ağ hatası VEYA timeout iptalinde 2 kez daha dene.
+        var retry = HttpPolicyExtensions
+            .HandleTransientHttpError()        // 5xx + ağ hataları (429 hariç)
+            .Or<TimeoutRejectedException>()    // per-attempt timeout tetiklenince de retry et
             .WaitAndRetryAsync(2, attempt => TimeSpan.FromMilliseconds(400 * attempt));
+
+        // Wrap sırası: retry(dış) → timeout(iç). Her denemeye taze 8sn'lik timeout uygulanır.
+        return retry.WrapAsync(perAttemptTimeout);
+    }
 }
