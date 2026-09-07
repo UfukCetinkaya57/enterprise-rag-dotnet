@@ -27,6 +27,17 @@ public interface IVectorStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Keyword (full-text) araması — hybrid search'ün keyword ayağı. Postgres tsvector/ts_rank
+    /// ile sorgudaki kelimelerin geçtiği chunk'ları alaka sırasına göre getirir. Session filtreli.
+    /// Vektör aramasından farkı: anlamı değil TAM KELİME eşleşmesini yakalar (kod/isim/kısaltma için).
+    /// </summary>
+    Task<IReadOnlyList<ScoredChunk>> SearchKeywordAsync(
+        string query,
+        int topK,
+        IReadOnlyCollection<string> allowedSessionIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// TTL temizliği: verilen tarihten eski chunk'ları/dokümanları siler,
     /// <paramref name="keepSessionId"/> (seed) hariç. Silinen chunk sayısını döndürür.
     /// </summary>

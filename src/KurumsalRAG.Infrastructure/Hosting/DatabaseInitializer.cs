@@ -39,6 +39,12 @@ public sealed class DatabaseInitializer : IHostedService
 
         var sql = $"""
             CREATE EXTENSION IF NOT EXISTS vector;
+            -- Türkçe diakritik normalizasyonu için (hybrid keyword araması: 'yıllık' = 'yillik').
+            CREATE EXTENSION IF NOT EXISTS unaccent;
+            -- unaccent() STABLE'dır; generated kolonda kullanabilmek için IMMUTABLE sarmalayıcı.
+            CREATE OR REPLACE FUNCTION immutable_unaccent(text) RETURNS text
+                LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+                AS $func$ SELECT unaccent('unaccent', $1) $func$;
 
             CREATE TABLE IF NOT EXISTS documents (
                 id          UUID PRIMARY KEY,
@@ -65,6 +71,13 @@ public sealed class DatabaseInitializer : IHostedService
             CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks (document_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_session_id  ON chunks (session_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_created_at  ON chunks (created_at);
+
+            -- Hybrid search keyword ayağı: unaccent + 'turkish' full-text generated kolon + GIN index.
+            -- unaccent sayesinde 'yıllık' ile 'yillik' aynı token'a düşer (Türkçe diakritik toleransı).
+            -- IF NOT EXISTS: idempotent (her açılışta yeniden hesaplamaz). Şema değişiminde temiz volume gerekir.
+            ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_tsv tsvector
+                GENERATED ALWAYS AS (to_tsvector('turkish', immutable_unaccent(content))) STORED;
+            CREATE INDEX IF NOT EXISTS idx_chunks_content_tsv ON chunks USING gin (content_tsv);
 
             CREATE TABLE IF NOT EXISTS response_cache (
                 session_id    TEXT NOT NULL,

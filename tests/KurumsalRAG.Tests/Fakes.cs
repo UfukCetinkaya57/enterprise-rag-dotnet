@@ -36,6 +36,10 @@ internal sealed class FakeVectorStore : IVectorStore
         var chunk = new DocumentChunk { Id = Guid.NewGuid(), Content = "örnek içerik", SessionId = "seed" };
         return Task.FromResult<IReadOnlyList<ScoredChunk>>([new ScoredChunk(chunk, 0.9)]);
     }
+
+    public Task<IReadOnlyList<ScoredChunk>> SearchKeywordAsync(
+        string query, int topK, IReadOnlyCollection<string> allowedSessionIds, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ScoredChunk>>([]);
 }
 
 internal sealed class FakeReranker : IReranker

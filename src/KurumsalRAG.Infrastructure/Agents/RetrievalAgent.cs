@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
+using KurumsalRAG.Application.Retrieval;
 using KurumsalRAG.Application.Sessions;
 using KurumsalRAG.Domain.ValueObjects;
 using Microsoft.Extensions.Options;
@@ -46,9 +47,21 @@ public sealed class RetrievalAgent
         [Description("Kullanıcının sorusu")] string question,
         CancellationToken cancellationToken = default)
     {
+        var allowed = AllowedSessions();
         var queryEmbedding = await _embeddings.EmbedAsync(question, cancellationToken);
-        var candidates = await _vectorStore.SearchAsync(
-            queryEmbedding, _options.TopK, AllowedSessions(), cancellationToken);
+        var vectorHits = await _vectorStore.SearchAsync(queryEmbedding, _options.TopK, allowed, cancellationToken);
+
+        IReadOnlyList<ScoredChunk> candidates;
+        if (_options.Hybrid)
+        {
+            var keywordHits = await _vectorStore.SearchKeywordAsync(question, _options.TopK, allowed, cancellationToken);
+            candidates = ReciprocalRankFusion.Fuse([vectorHits, keywordHits], _options.TopK);
+        }
+        else
+        {
+            candidates = vectorHits;
+        }
+
         var ranked = await _reranker.RerankAsync(question, candidates, _options.TopN, cancellationToken);
 
         var chunks = new List<RetrievedChunk>(ranked.Count);

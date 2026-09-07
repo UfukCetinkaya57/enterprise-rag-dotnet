@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
+using KurumsalRAG.Application.Retrieval;
 using KurumsalRAG.Application.Sessions;
 using KurumsalRAG.Domain.ValueObjects;
 using KurumsalRAG.Infrastructure.Ingestion;
@@ -276,9 +277,26 @@ public sealed class RagQueryService : IRagQueryService
         var safeQuestion = guard.SanitizedInput;
         var embeddingTokens = TokenEstimator.Estimate(safeQuestion);
 
+        var allowed = AllowedSessions();
         var queryEmbedding = await _embeddings.EmbedAsync(safeQuestion, cancellationToken);
-        var candidates = await _vectorStore.SearchAsync(
-            queryEmbedding, _options.Retrieval.TopK, AllowedSessions(), cancellationToken);
+        var vectorHits = await _vectorStore.SearchAsync(
+            queryEmbedding, _options.Retrieval.TopK, allowed, cancellationToken);
+
+        // Hybrid: vektör (anlam) + keyword (full-text) → RRF ile birleştir. Değilse yalnız vektör.
+        IReadOnlyList<ScoredChunk> candidates;
+        if (_options.Retrieval.Hybrid)
+        {
+            var keywordHits = await _vectorStore.SearchKeywordAsync(
+                safeQuestion, _options.Retrieval.TopK, allowed, cancellationToken);
+            candidates = ReciprocalRankFusion.Fuse([vectorHits, keywordHits], _options.Retrieval.TopK);
+            _logger.LogInformation("Hybrid retrieval: vektör={V} keyword={K} → füzyon={F}",
+                vectorHits.Count, keywordHits.Count, candidates.Count);
+        }
+        else
+        {
+            candidates = vectorHits;
+        }
+
         var ranked = await _reranker.RerankAsync(safeQuestion, candidates, _options.Retrieval.TopN, cancellationToken);
 
         var retrievedChunks = new List<RetrievedChunk>(ranked.Count);

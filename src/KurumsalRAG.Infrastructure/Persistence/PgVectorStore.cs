@@ -110,6 +110,61 @@ public sealed class PgVectorStore : IVectorStore
         return results;
     }
 
+    public async Task<IReadOnlyList<ScoredChunk>> SearchKeywordAsync(
+        string query,
+        int topK,
+        IReadOnlyCollection<string> allowedSessionIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (allowedSessionIds.Count == 0 || string.IsNullOrWhiteSpace(query))
+            return [];
+
+        // content_tsv: DatabaseInitializer'da 'turkish' config ile üretilen generated tsvector kolonu.
+        // websearch_to_tsquery serbest metni hoşgörülü şekilde sorguya çevirir; ts_rank alaka skoru.
+        // Sorgu kelimelerini OR'la: soru "kaç/gün/nedir" gibi dolgu kelime içerir; AND (websearch)
+        // tüm kelimeleri tek chunk'ta ister → çok katı. Bunun yerine sorunun lexeme'lerini OR'larız
+        // (herhangi biri eşleşen chunk ts_rank ile skorlanır). immutable_unaccent: 'yıllık'='yillik'.
+        // CTE ile OR-sorgusu bir kez hesaplanır (stopword/normalizasyon Postgres'e bırakılır).
+        const string sql = """
+            WITH q AS (
+                SELECT to_tsquery('turkish',
+                    array_to_string(
+                        tsvector_to_array(to_tsvector('turkish', immutable_unaccent(@q))),
+                        ' | ')) AS tsq
+            )
+            SELECT c.id, c.document_id, c.session_id, c.content, c.chunk_index, c.token_count,
+                   ts_rank(c.content_tsv, q.tsq) AS score
+            FROM chunks c, q
+            WHERE c.session_id = ANY(@sessions)
+              AND q.tsq IS NOT NULL
+              AND c.content_tsv @@ q.tsq
+            ORDER BY score DESC
+            LIMIT @topk
+            """;
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("q", query);
+        cmd.Parameters.AddWithValue("sessions", allowedSessionIds.ToArray());
+        cmd.Parameters.AddWithValue("topk", topK);
+
+        var results = new List<ScoredChunk>(topK);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var chunk = new DocumentChunk
+            {
+                Id = reader.GetGuid(0),
+                DocumentId = reader.GetGuid(1),
+                SessionId = reader.GetString(2),
+                Content = reader.GetString(3),
+                ChunkIndex = reader.GetInt32(4),
+                TokenCount = reader.GetInt32(5)
+            };
+            results.Add(new ScoredChunk(chunk, reader.GetDouble(6)));
+        }
+        return results;
+    }
+
     public async Task<int> PurgeExpiredAsync(
         DateTimeOffset olderThan,
         string keepSessionId,

@@ -43,6 +43,13 @@ public sealed class RetrievalOptions
     /// Gemini free-tier'da "Hybrid" önerilir (rate limit'i korur).
     /// </summary>
     public string RerankerType { get; init; } = "Llm";
+
+    /// <summary>
+    /// Hybrid search: true ise retrieval'da vektör (anlam) + keyword (full-text) araması birlikte
+    /// yapılır ve RRF ile birleştirilir. Kod/isim/kısaltma gibi tam-eşleşmeleri de yakalar.
+    /// false ise yalnızca vektör araması.
+    /// </summary>
+    public bool Hybrid { get; init; } = false;
 }
 
 public sealed class FaithfulnessOptions
