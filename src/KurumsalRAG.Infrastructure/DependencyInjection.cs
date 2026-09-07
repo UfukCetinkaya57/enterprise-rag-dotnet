@@ -4,6 +4,7 @@ using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
 using KurumsalRAG.Infrastructure.Agents;
 using KurumsalRAG.Infrastructure.Configuration;
+using KurumsalRAG.Infrastructure.Evaluation;
 using KurumsalRAG.Infrastructure.Hosting;
 using KurumsalRAG.Infrastructure.Ingestion;
 using KurumsalRAG.Infrastructure.Persistence;
@@ -130,6 +131,7 @@ public static class DependencyInjection
         services.AddScoped<IFaithfulnessEvaluator, FaithfulnessCheckerAgent>();
         services.AddScoped<IFaithfulnessDiagnostics, FaithfulnessDiagnosticsService>();
         services.AddScoped<IEvaluationDiagnostics, EvaluationDiagnosticsService>();
+        services.AddScoped<IEvaluationHarness, EvaluationHarnessService>();
 
         return services;
     }

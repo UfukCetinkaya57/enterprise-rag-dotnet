@@ -17,16 +17,29 @@ public sealed class DiagnosticsController : ControllerBase
     private readonly IRerankDiagnostics _rerankDiagnostics;
     private readonly IFaithfulnessDiagnostics _faithfulnessDiagnostics;
     private readonly IEvaluationDiagnostics _evaluationDiagnostics;
+    private readonly IEvaluationHarness _evaluationHarness;
 
     public DiagnosticsController(
         IRerankDiagnostics rerankDiagnostics,
         IFaithfulnessDiagnostics faithfulnessDiagnostics,
-        IEvaluationDiagnostics evaluationDiagnostics)
+        IEvaluationDiagnostics evaluationDiagnostics,
+        IEvaluationHarness evaluationHarness)
     {
         _rerankDiagnostics = rerankDiagnostics;
         _faithfulnessDiagnostics = faithfulnessDiagnostics;
         _evaluationDiagnostics = evaluationDiagnostics;
+        _evaluationHarness = evaluationHarness;
     }
+
+    /// <summary>
+    /// Altın soru setini tüm RAG hattından geçirip Recall/MRR/answer-accuracy/refusal/faithfulness
+    /// metriklerini döndürür. "RAG'i ölçme" aracı — çok LLM çağrısı yapar, diagnostics-gated.
+    /// </summary>
+    [HttpGet("eval-suite")]
+    public async Task<IActionResult> EvalSuite(
+        [FromQuery] int delayMs, CancellationToken cancellationToken)
+        // delayMs: free-tier rate limit'ini aşmamak için sorular arası gecikme (ör. 4000).
+        => Ok(await _evaluationHarness.RunAsync(delayMs, cancellationToken));
 
     /// <summary>Bir sorgu için rerank öncesi (cosine) ve sonrası sıralamayı yan yana döner.</summary>
     [HttpGet("rerank")]

@@ -39,6 +39,10 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       # Provider seçimi: "Gemini" (varsayılan, ücretsiz) veya "OpenAI".
       Ai__Provider: ${Ai__Provider:-Gemini}
+      # Opsiyonel override'lar (varsayılan prod davranışı: diagnostics kapalı, faithfulness kapalı).
+      # Eval-suite'i lokalde koşmak için .env.prod'da true yapılabilir.
+      Demo__DiagnosticsEnabled: ${Demo__DiagnosticsEnabled:-false}
+      Rag__Faithfulness__Enabled: ${Rag__Faithfulness__Enabled:-false}
       # Her iki key de opsiyonel — hangi provider seçiliyse onunki dolu olmalı.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

@@ -140,8 +140,10 @@ daha iyi puanlayıp top-n (4) seçer → LLM'e temiz context.
 - **Cross-encoder** (ileri): soru+aday'ı **birlikte** modele verip skor üretir → çok doğru ama yavaş,
   bu yüzden retrieval'da değil **rerank'ta** (az aday) kullanılır. Normal embedding "bi-encoder"dır
   (ayrı vektörleme, hızlı, ölçeklenir).
-- **Hybrid search** (ileri): vektör + keyword (BM25) aramasını RETRIEVAL'da birleştirmek. Ürün kodu/
-  kısaltma/özel isim gibi tam-eşleşmeler için keyword şart; RRF ile füze edilir.
+- **Hybrid search** — *bu projede UYGULANDI:* vektör (anlam) + keyword (Postgres full-text `ts_rank`)
+  araması **RETRIEVAL'da** birlikte yapılır, **RRF** ile birleşir. Türkçe için `unaccent`
+  ('yıllık'='yillik') + sorgu kelimeleri OR'lanır. `Rag:Retrieval:Hybrid` config'ten. Kod/isim/
+  kısaltma gibi tam-eşleşmeleri de yakalar. ([`ReciprocalRankFusion`](../src/KurumsalRAG.Application/Retrieval/ReciprocalRankFusion.cs))
 
 Portlar (Application) → adapter (Infrastructure): [`IReranker`](../src/KurumsalRAG.Application/Abstractions/IReranker.cs),
 [`IVectorStore`](../src/KurumsalRAG.Application/Abstractions/IVectorStore.cs). Sağlayıcı/yöntem değişimi = tek adapter.
@@ -163,10 +165,21 @@ cevabı+context'i ayrı bir LLM çağrısıyla denetletir (**LLM-as-a-judge**). 
 - **Generation:** faithfulness (uydurma), answer-relevance (soruyu yanıtlıyor mu), context-precision/recall.
 - Generation metrikleri genelde **LLM-as-a-judge** ile ölçülür (bizim faithfulness checker bunun örneği).
 - Framework: **RAGAS** / DeepEval / TruLens — CI'a koyup her değişikliği (chunk/reranker/prompt) etiketli
-  sete karşı test et (regresyon). Bizde `IEvaluationDiagnostics` groundedness+skor+token loglar; RAGAS eklenebilir.
+  sete karşı test et (regresyon).
 
-> **Mülakat:** "Retrieval'ı Recall@k/MRR ile, generation'ı faithfulness/relevance ile — ikincisini
-> LLM-as-a-judge ile ölçerim; projemdeki faithfulness checker canlı örneği. Prod'da RAGAS'ı CI'a koyardım."
+**Bu projede UYGULANDI — evaluation harness** ([`EvaluationHarnessService`](../src/KurumsalRAG.Infrastructure/Evaluation/EvaluationHarnessService.cs)):
+seed dokümanına dayalı **altın soru seti** (context-içi + context-dışı/red beklenen) tüm RAG
+hattından geçirilip metrikler hesaplanır. `GET /api/diagnostics/eval-suite` (dev/CI aracı,
+prod'da kapalı — çok LLM çağrısı yapar). Ölçülen gerçek sonuçlar:
+- **Recall@n = %100** (doğru parça hep getirildi) · **MRR = 1.0** (hep 1. sırada)
+- **Answer accuracy = %100** · **Avg faithfulness = 0.95** · red doğruluğu ölçülür
+- Gerçekler chunk id'ye değil **metin parçalarına** bağlı (id'ler her ingest'te değişir); `FactMatcher`
+  Türkçe diakritiği tolere eder.
+
+> **Mülakat:** "Retrieval'ı Recall@k/MRR, generation'ı faithfulness/answer-accuracy ile ölçen bir
+> **evaluation harness** yazdım — altın soru setini gerçek hattan geçiriyor. Recall %100, MRR 1.0,
+> faithfulness 0.95 ölçtüm. Bu, 'değiştirdim iyileşti mi' sorusuna objektif cevap verir; prod'da
+> RAGAS'ı CI'a koyup her PR'da regresyon testi yapardım."
 
 ---
 
