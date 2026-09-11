@@ -26,6 +26,8 @@ public sealed class RagQueryService : IRagQueryService
     private readonly IResponseCache _cache;
     private readonly ITokenBudgetGuard _budget;
     private readonly ISessionAccessor _session;
+    private readonly IConversationStore _conversation;
+    private readonly IQueryRewriter _queryRewriter;
     private readonly RagOptions _options;
     private readonly DemoOptions _demo;
     private readonly ILogger<RagQueryService> _logger;
@@ -40,6 +42,8 @@ public sealed class RagQueryService : IRagQueryService
         IResponseCache cache,
         ITokenBudgetGuard budget,
         ISessionAccessor session,
+        IConversationStore conversation,
+        IQueryRewriter queryRewriter,
         IOptions<RagOptions> options,
         IOptions<DemoOptions> demo,
         ILogger<RagQueryService> logger)
@@ -53,6 +57,8 @@ public sealed class RagQueryService : IRagQueryService
         _cache = cache;
         _budget = budget;
         _session = session;
+        _conversation = conversation;
+        _queryRewriter = queryRewriter;
         _options = options.Value;
         _demo = demo.Value;
         _logger = logger;
@@ -79,20 +85,27 @@ public sealed class RagQueryService : IRagQueryService
             return new RagAnswer(BlockedText, [], Blocked(), AnswerType.Normal);
         }
 
-        // Cache: (session + normalize soru). Hit'te LLM'e gidilmez.
-        var cached = await _cache.GetAsync(_session.SessionId, guard.SanitizedInput, cancellationToken);
-        if (cached is not null)
+        // Konuşma geçmişi (multi-turn açıksa). Takip sorularında retrieval + prompt bağlamı buradan.
+        var history = await LoadHistoryAsync(cancellationToken);
+
+        // Cache: (session + normalize soru). Hit'te LLM'e gidilmez. Multi-turn AÇIKKEN cache
+        // devre dışı — aynı soru farklı bağlamda farklı cevap verebilir (takip cevabı önceki tura bağlı).
+        if (!_options.Conversation.Enabled)
         {
-            _logger.LogInformation("Cache hit (session={Session}). Toplam hit={Hits}",
-                _session.SessionId, _cache.HitCount);
-            return new RagAnswer(
-                cached.Answer, cached.Sources,
-                new RagObservability(0, cached.Sources.Count, 0, 0, cached.FaithfulnessScore, guard.IsSuspicious),
-                AnswerType.Cached);
+            var cached = await _cache.GetAsync(_session.SessionId, guard.SanitizedInput, cancellationToken);
+            if (cached is not null)
+            {
+                _logger.LogInformation("Cache hit (session={Session}). Toplam hit={Hits}",
+                    _session.SessionId, _cache.HitCount);
+                return new RagAnswer(
+                    cached.Answer, cached.Sources,
+                    new RagObservability(0, cached.Sources.Count, 0, 0, cached.FaithfulnessScore, guard.IsSuspicious),
+                    AnswerType.Cached);
+            }
         }
 
-        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, cancellationToken);
-        var messages = RagPromptBuilder.Build(guard.SanitizedInput, context);
+        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, history, cancellationToken);
+        var messages = RagPromptBuilder.Build(guard.SanitizedInput, context, history);
 
         LlmCompletion completion;
         try
@@ -129,9 +142,14 @@ public sealed class RagQueryService : IRagQueryService
             FaithfulnessScore: faithfulnessScore,
             PromptGuardTriggered: guard.IsSuspicious);
 
-        // Başarılı normal cevabı cache'le.
-        await _cache.SetAsync(_session.SessionId, guard.SanitizedInput,
-            new CachedAnswer(completion.Content, sources, faithfulnessScore), cancellationToken);
+        // Cache'le: yalnızca multi-turn KAPALIYKEN. Açıkken cache okuması hep atlanır
+        // (ilk turdan sonra geçmiş dolar), o yüzden yazmak ölü kayıt olur.
+        if (!_options.Conversation.Enabled)
+            await _cache.SetAsync(_session.SessionId, guard.SanitizedInput,
+                new CachedAnswer(completion.Content, sources, faithfulnessScore), cancellationToken);
+
+        // Turu geçmişe kaydet (multi-turn açıksa) — sonraki takip sorusu bunu görecek.
+        await PersistTurnAsync(guard.SanitizedInput, completion.Content, cancellationToken);
 
         _logger.LogInformation("Cevap üretildi. tokens={Tokens} faithfulness={Faith}",
             totalTokens, faithfulnessScore);
@@ -162,21 +180,27 @@ public sealed class RagQueryService : IRagQueryService
             yield break;
         }
 
-        var cached = await _cache.GetAsync(_session.SessionId, guard.SanitizedInput, cancellationToken);
-        if (cached is not null)
+        var history = await LoadHistoryAsync(cancellationToken);
+
+        // Multi-turn açıkken cache devre dışı (takip cevabı önceki tura bağlı).
+        if (!_options.Conversation.Enabled)
         {
-            _logger.LogInformation("Cache hit (stream, session={Session}).", _session.SessionId);
-            yield return RagStreamChunk.Status(AnswerType.Cached);
-            yield return RagStreamChunk.TokenChunk(cached.Answer);
-            yield return RagStreamChunk.FinalChunk(new RagAnswer(
-                cached.Answer, cached.Sources,
-                new RagObservability(0, cached.Sources.Count, 0, 0, cached.FaithfulnessScore),
-                AnswerType.Cached));
-            yield break;
+            var cached = await _cache.GetAsync(_session.SessionId, guard.SanitizedInput, cancellationToken);
+            if (cached is not null)
+            {
+                _logger.LogInformation("Cache hit (stream, session={Session}).", _session.SessionId);
+                yield return RagStreamChunk.Status(AnswerType.Cached);
+                yield return RagStreamChunk.TokenChunk(cached.Answer);
+                yield return RagStreamChunk.FinalChunk(new RagAnswer(
+                    cached.Answer, cached.Sources,
+                    new RagObservability(0, cached.Sources.Count, 0, 0, cached.FaithfulnessScore),
+                    AnswerType.Cached));
+                yield break;
+            }
         }
 
-        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, cancellationToken);
-        var messages = RagPromptBuilder.Build(guard.SanitizedInput, context);
+        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, history, cancellationToken);
+        var messages = RagPromptBuilder.Build(guard.SanitizedInput, context, history);
 
         yield return RagStreamChunk.Status(AnswerType.Normal);
 
@@ -240,8 +264,11 @@ public sealed class RagQueryService : IRagQueryService
         var estTokens = TokenEstimator.Estimate(context.ToPromptBlock() + answer) + embeddingTokens;
         await _budget.RecordUsageAsync(estTokens, cancellationToken);
 
-        await _cache.SetAsync(_session.SessionId, guard.SanitizedInput,
-            new CachedAnswer(answer, sources, faithfulnessScore), cancellationToken);
+        if (!_options.Conversation.Enabled)
+            await _cache.SetAsync(_session.SessionId, guard.SanitizedInput,
+                new CachedAnswer(answer, sources, faithfulnessScore), cancellationToken);
+
+        await PersistTurnAsync(guard.SanitizedInput, answer, cancellationToken);
 
         var observability = new RagObservability(
             _options.Retrieval.TopK, sources.Count, 0, 0, faithfulnessScore, guard.IsSuspicious);
@@ -267,15 +294,68 @@ public sealed class RagQueryService : IRagQueryService
 
     private static RagObservability Blocked() => new(0, 0, 0, 0, PromptGuardTriggered: true);
 
-    /// <summary>embed → session-filtreli retrieve → rerank → context. Embedding token tahminini de döndürür.</summary>
+    /// <summary>
+    /// Multi-turn açıksa geçmişi çeker. Kapalıysa/boşsa boş liste (LLM/DB maliyeti yok).
+    /// </summary>
+    private async Task<IReadOnlyList<ConversationTurn>> LoadHistoryAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Conversation.Enabled)
+            return [];
+        return await _conversation.GetRecentAsync(
+            _session.SessionId, _options.Conversation.HistoryWindow, cancellationToken);
+    }
+
+    /// <summary>
+    /// Başarılı bir turu geçmişe kaydeder (multi-turn açıksa). Boş veya "bilgi yok" (refusal)
+    /// cevapları KAYDETMEZ — sonraki query-rewrite/prompt'u zehirlememesi için. Kayıt hatası
+    /// (ör. eşzamanlı çift-gönderim → PK çakışması) cevabı bozmasın diye YUTULUR (sadece loglanır).
+    /// </summary>
+    private async Task PersistTurnAsync(string question, string answer, CancellationToken cancellationToken)
+    {
+        if (!_options.Conversation.Enabled)
+            return;
+
+        // Boş cevap ya da refusal → geçmişe değmez (bağlamı bozar, HistoryWindow'u boşa doldurur).
+        if (string.IsNullOrWhiteSpace(answer) ||
+            answer.Contains(RagPromptBuilder.RefusalText, StringComparison.Ordinal))
+            return;
+
+        try
+        {
+            await _conversation.AppendAsync(_session.SessionId, question, answer, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Cevap zaten üretildi; geçmişe yazamamak isteği çökertmemeli.
+            _logger.LogWarning(ex, "Konuşma turu kaydedilemedi (yok sayılıyor).");
+        }
+    }
+
+    /// <summary>
+    /// embed → session-filtreli retrieve → rerank → context. Embedding, GEÇMİŞLE yeniden yazılmış
+    /// (bağımsız) soruyla yapılır ki takip soruları doğru chunk'ı bulsun. Embedding token tahminini de döndürür.
+    /// </summary>
     private async Task<(RetrievedContext Context, IReadOnlyList<CitedSource> Sources, int EmbeddingTokens)>
-        RetrieveContextAsync(PromptGuardResult guard, CancellationToken cancellationToken)
+        RetrieveContextAsync(
+            PromptGuardResult guard,
+            IReadOnlyList<ConversationTurn> history,
+            CancellationToken cancellationToken)
     {
         if (guard.IsSuspicious)
             _logger.LogWarning("Prompt guard (sanitize): {Reasons}", string.Join(", ", guard.Reasons));
 
-        var safeQuestion = guard.SanitizedInput;
+        // Takip sorusunu geçmişle bağımsız tam soruya çevir (geçmiş boşsa aynen döner, LLM çağrısı yok).
+        var safeQuestion = await _queryRewriter.RewriteAsync(guard.SanitizedInput, history, cancellationToken);
         var embeddingTokens = TokenEstimator.Estimate(safeQuestion);
+
+        // Rewrite gerçekten LLM çağrısı yaptıysa (geçmiş vardı) o çağrının token maliyetini de
+        // bütçeye yansıt — girdi (geçmiş + soru) + çıktı (yeni soru). Aksi halde gerçek harcama az görünür.
+        if (history.Count > 0)
+        {
+            var rewriteCost = TokenEstimator.Estimate(
+                string.Concat(history.Select(t => t.Question + t.Answer)) + guard.SanitizedInput + safeQuestion);
+            embeddingTokens += rewriteCost;
+        }
 
         var allowed = AllowedSessions();
         var queryEmbedding = await _embeddings.EmbedAsync(safeQuestion, cancellationToken);

@@ -89,6 +89,16 @@ public sealed class DatabaseInitializer : IHostedService
             );
             CREATE INDEX IF NOT EXISTS idx_response_cache_created_at ON response_cache (created_at);
 
+            CREATE TABLE IF NOT EXISTS conversation_turns (
+                session_id  TEXT NOT NULL,
+                turn_index  INT  NOT NULL,
+                question    TEXT NOT NULL,
+                answer      TEXT NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (session_id, turn_index)
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_turns_created_at ON conversation_turns (created_at);
+
             CREATE TABLE IF NOT EXISTS daily_usage (
                 usage_date  DATE PRIMARY KEY,
                 tokens_used BIGINT NOT NULL DEFAULT 0

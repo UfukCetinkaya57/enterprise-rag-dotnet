@@ -52,10 +52,13 @@ internal sealed class FakeReranker : IReranker
 internal sealed class FakeLlm : ILlmProvider
 {
     public int CompleteCalls { get; private set; }
+    // Testin cevabı özelleştirebilmesi için (ör. refusal metni döndürmek).
+    public string Response { get; init; } = "üretilen cevap [chunk:1]";
+
     public Task<LlmCompletion> CompleteAsync(IReadOnlyList<ChatMessage> m, CancellationToken ct = default)
     {
         CompleteCalls++;
-        return Task.FromResult(new LlmCompletion("üretilen cevap [chunk:1]", new TokenUsage(100, 20)));
+        return Task.FromResult(new LlmCompletion(Response, new TokenUsage(100, 20)));
     }
     public async IAsyncEnumerable<string> StreamAsync(
         IReadOnlyList<ChatMessage> m,
@@ -112,4 +115,37 @@ internal sealed class FakeSession : ISessionAccessor
 {
     public FakeSession(string id) => SessionId = id;
     public string SessionId { get; }
+}
+
+internal sealed class FakeConversationStore : IConversationStore
+{
+    private readonly List<ConversationTurn> _turns;
+    public bool AppendCalled { get; private set; }
+
+    public FakeConversationStore(params ConversationTurn[] history) => _turns = [.. history];
+
+    public Task AppendAsync(string s, string q, string a, CancellationToken ct = default)
+    {
+        AppendCalled = true;
+        _turns.Add(new ConversationTurn(q, a));
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<ConversationTurn>> GetRecentAsync(string s, int count, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ConversationTurn>>(_turns.TakeLast(count).ToArray());
+}
+
+internal sealed class FakeQueryRewriter : IQueryRewriter
+{
+    public string? LastRewrittenFrom { get; private set; }
+
+    // Geçmiş varsa "yeniden yazıldı" işaretleyerek orijinali değiştir; yoksa aynen döndür.
+    public Task<string> RewriteAsync(
+        string question, IReadOnlyList<ConversationTurn> history, CancellationToken ct = default)
+    {
+        if (history.Count == 0)
+            return Task.FromResult(question);
+        LastRewrittenFrom = question;
+        return Task.FromResult($"[rewritten] {question}");
+    }
 }

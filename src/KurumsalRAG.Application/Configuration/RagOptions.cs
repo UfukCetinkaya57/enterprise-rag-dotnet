@@ -12,6 +12,19 @@ public sealed class RagOptions
     public RetrievalOptions Retrieval { get; init; } = new();
     public FaithfulnessOptions Faithfulness { get; init; } = new();
     public SecurityOptions Security { get; init; } = new();
+    public ConversationOptions Conversation { get; init; } = new();
+}
+
+public sealed class ConversationOptions
+{
+    /// <summary>
+    /// Multi-turn konuşma hafızasını açar/kapar. Açıkken takip soruları geçmişle
+    /// yeniden yazılır ve son turlar prompt'a eklenir; her tur DB'ye kaydedilir.
+    /// </summary>
+    public bool Enabled { get; init; } = false;
+
+    /// <summary>Prompt'a eklenecek ve query-rewrite'a verilecek son tur sayısı (soru-cevap çifti).</summary>
+    public int HistoryWindow { get; init; } = 5;
 }
 
 public sealed class SecurityOptions

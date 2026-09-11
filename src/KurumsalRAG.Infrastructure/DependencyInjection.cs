@@ -104,6 +104,11 @@ public static class DependencyInjection
         services.AddScoped<IRagQueryService, RagQueryService>();
         services.AddScoped<IRerankDiagnostics, RerankDiagnosticsService>();
 
+        // --- Multi-turn konuşma hafızası ---
+        services.AddScoped<IConversationStore, PgConversationStore>();
+        // Query rewriter: takip sorusunu geçmişle bağımsız soruya çevirir (retrieval doğruluğu için).
+        services.AddScoped<IQueryRewriter, LlmQueryRewriter>();
+
         // --- Demo zırhı adapter'ları (hepsi pgvector deposunu paylaşır) ---
         services.AddScoped<IResponseCache, PgResponseCache>();
         services.AddScoped<ITokenBudgetGuard, PgTokenBudgetStore>();
