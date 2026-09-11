@@ -1,3 +1,4 @@
+using KurumsalRAG.Application.Abstractions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 
@@ -21,6 +22,8 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
         var (status, title) = exception switch
         {
+            // BYOK anahtarı reddedildi → kullanıcıya net mesaj (anahtarını düzeltebilsin).
+            InvalidApiKeyException => (StatusCodes.Status400BadRequest, exception.Message),
             InvalidOperationException => (StatusCodes.Status422UnprocessableEntity, exception.Message),
             BadHttpRequestException => (StatusCodes.Status400BadRequest, "Geçersiz istek."),
             _ => (StatusCodes.Status500InternalServerError, "Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.")

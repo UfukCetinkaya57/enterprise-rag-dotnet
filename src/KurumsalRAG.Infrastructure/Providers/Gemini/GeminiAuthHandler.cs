@@ -32,6 +32,16 @@ public sealed class GeminiAuthHandler : DelegatingHandler
 
         var response = await base.SendAsync(request, cancellationToken);
 
+        // BYOK anahtarı reddedildi (400/401/403) → kullanıcıya anlaşılır hata (jenerik 500 yerine).
+        // Yalnızca kullanıcının kendi anahtarı için: havuz anahtarında bu bizim yapılandırma sorunumuz,
+        // orada jenerik akış devam etsin (kullanıcıya "anahtarınız geçersiz" demek yanıltıcı olur).
+        if (lease.IsByok && response.StatusCode is
+            HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            response.Dispose();
+            throw new InvalidApiKeyException();
+        }
+
         // Kota (429) veya geçici aşırı yük (503) → bu havuz anahtarını cooldown'a al.
         if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
             _keyProvider.ReportFailure(lease);
