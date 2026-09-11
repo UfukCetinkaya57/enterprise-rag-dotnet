@@ -28,6 +28,7 @@ public sealed class RagQueryService : IRagQueryService
     private readonly ISessionAccessor _session;
     private readonly IConversationStore _conversation;
     private readonly IQueryRewriter _queryRewriter;
+    private readonly IUserLlmResolver _userLlm;
     private readonly RagOptions _options;
     private readonly DemoOptions _demo;
     private readonly ILogger<RagQueryService> _logger;
@@ -44,6 +45,7 @@ public sealed class RagQueryService : IRagQueryService
         ISessionAccessor session,
         IConversationStore conversation,
         IQueryRewriter queryRewriter,
+        IUserLlmResolver userLlm,
         IOptions<RagOptions> options,
         IOptions<DemoOptions> demo,
         ILogger<RagQueryService> logger)
@@ -59,6 +61,7 @@ public sealed class RagQueryService : IRagQueryService
         _session = session;
         _conversation = conversation;
         _queryRewriter = queryRewriter;
+        _userLlm = userLlm;
         _options = options.Value;
         _demo = demo.Value;
         _logger = logger;
@@ -85,6 +88,10 @@ public sealed class RagQueryService : IRagQueryService
             return new RagAnswer(BlockedText, [], Blocked(), AnswerType.Normal);
         }
 
+        // BYOK cevap-üreten LLM'i EN BAŞTA çöz: kullanıcı desteklenmeyen bir sağlayıcı gönderdiyse
+        // (InvalidApiKeyException) embedding'e para harcamadan burada reddedilsin. Yoksa havuz LLM'i.
+        var activeLlm = _userLlm.Resolve() ?? _llm;
+
         // Konuşma geçmişi (multi-turn açıksa). Takip sorularında retrieval + prompt bağlamı buradan.
         var history = await LoadHistoryAsync(cancellationToken);
 
@@ -110,7 +117,7 @@ public sealed class RagQueryService : IRagQueryService
         LlmCompletion completion;
         try
         {
-            completion = await _llm.CompleteAsync(messages, cancellationToken);
+            completion = await activeLlm.CompleteAsync(messages, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -180,6 +187,27 @@ public sealed class RagQueryService : IRagQueryService
             yield break;
         }
 
+        // BYOK LLM'ini EN BAŞTA çöz. Desteklenmeyen sağlayıcı → embedding'e para harcamadan nazik hata.
+        // yield catch içinde olamaz → hatayı yakala, mesajı dışarıda yield et.
+        ILlmProvider? activeLlm = null;
+        string? resolveError = null;
+        try
+        {
+            activeLlm = _userLlm.Resolve() ?? _llm;
+        }
+        catch (InvalidApiKeyException ex)
+        {
+            resolveError = ex.Message;
+        }
+
+        if (resolveError is not null)
+        {
+            yield return RagStreamChunk.Status(AnswerType.Normal);
+            yield return RagStreamChunk.TokenChunk(resolveError);
+            yield return RagStreamChunk.FinalChunk(new RagAnswer(resolveError, [], Blocked()));
+            yield break;
+        }
+
         var history = await LoadHistoryAsync(cancellationToken);
 
         // Multi-turn açıkken cache devre dışı (takip cevabı önceki tura bağlı).
@@ -208,7 +236,8 @@ public sealed class RagQueryService : IRagQueryService
         // LLM stream'i hata verirse (ör. Gemini 429) manuel enumerate ile YAKALA:
         // yield'li metotta try/catch mümkün değil, bu yüzden enumerator elle sürülür.
         var full = new StringBuilder();
-        var enumerator = _llm.StreamAsync(messages, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        // resolveError null olduğu için activeLlm burada kesinlikle dolu.
+        var enumerator = activeLlm!.StreamAsync(messages, cancellationToken).GetAsyncEnumerator(cancellationToken);
         try
         {
             while (true)

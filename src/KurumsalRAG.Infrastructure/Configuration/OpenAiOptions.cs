@@ -4,7 +4,7 @@ namespace KurumsalRAG.Infrastructure.Configuration;
 /// OpenAI provider konfigürasyonu. Model isimleri appsettings'ten; API key .env'den.
 /// Azure OpenAI'a geçişte sadece BaseUrl + deployment isimleri değişir.
 /// </summary>
-public sealed class OpenAiOptions
+public sealed record OpenAiOptions
 {
     public const string SectionName = "OpenAI";
 

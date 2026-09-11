@@ -4,7 +4,7 @@ namespace KurumsalRAG.Infrastructure.Configuration;
 /// Google Gemini provider konfigürasyonu. Model isimleri appsettings'ten; API key .env'den
 /// (GEMINI_API_KEY). Provider-agnostik mimarinin ikinci somut sağlayıcısı.
 /// </summary>
-public sealed class GeminiOptions
+public sealed record GeminiOptions
 {
     public const string SectionName = "Gemini";
 

@@ -16,6 +16,7 @@ public sealed class GeminiApiKeyProviderTests
     private sealed class FakeUserKey(string? key) : IUserApiKeyAccessor
     {
         public string? UserApiKey { get; set; } = key;
+        public string? UserProvider { get; set; }
     }
 
     private static GeminiApiKeyProvider Build(string keys, IUserApiKeyAccessor userKey, int cooldown = 60)
@@ -34,6 +35,30 @@ public sealed class GeminiApiKeyProviderTests
         Assert.Equal("user-key", lease.Key);
         Assert.True(lease.IsByok);
         Assert.Equal(-1, lease.PoolIndex);
+    }
+
+    [Fact]
+    public void Byok_openai_saglayicisiyla_verildiginde_gemini_havuzuna_dusulur()
+    {
+        // KRİTİK: Kullanıcı OpenAI anahtarı verdiyse o anahtar Gemini EMBEDDING'ine KOYULMAMALI
+        // (400/401 olur). Embedding hep havuzla çalışmalı; BYOK yalnızca provider=gemini iken geçerli.
+        var provider = Build("havuz-key", new FakeUserKey("sk-openai-key") { UserProvider = "openai" });
+
+        var lease = provider.Acquire();
+
+        Assert.False(lease.IsByok);                 // BYOK olarak kullanılmadı
+        Assert.Equal("havuz-key", lease.Key);       // havuz anahtarı seçildi
+    }
+
+    [Fact]
+    public void Byok_gemini_saglayicisiyla_verildiginde_kullanici_anahtari_kullanilir()
+    {
+        var provider = Build("havuz-key", new FakeUserKey("user-gemini-key") { UserProvider = "gemini" });
+
+        var lease = provider.Acquire();
+
+        Assert.True(lease.IsByok);
+        Assert.Equal("user-gemini-key", lease.Key);
     }
 
     [Fact]

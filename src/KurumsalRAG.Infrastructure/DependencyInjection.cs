@@ -8,6 +8,7 @@ using KurumsalRAG.Infrastructure.Evaluation;
 using KurumsalRAG.Infrastructure.Hosting;
 using KurumsalRAG.Infrastructure.Ingestion;
 using KurumsalRAG.Infrastructure.Persistence;
+using KurumsalRAG.Infrastructure.Providers;
 using KurumsalRAG.Infrastructure.Providers.Gemini;
 using KurumsalRAG.Infrastructure.Providers.OpenAi;
 using KurumsalRAG.Infrastructure.Reranking;
@@ -38,6 +39,7 @@ public static class DependencyInjection
         services.Configure<RagOptions>(configuration.GetSection(RagOptions.SectionName));
         services.Configure<OpenAiOptions>(configuration.GetSection(OpenAiOptions.SectionName));
         services.Configure<GeminiOptions>(configuration.GetSection(GeminiOptions.SectionName));
+        services.Configure<ByokOptions>(configuration.GetSection(ByokOptions.SectionName));
         services.Configure<AiProviderOptions>(configuration.GetSection(AiProviderOptions.SectionName));
         services.Configure<PostgresOptions>(configuration.GetSection(PostgresOptions.SectionName));
         services.Configure<DemoOptions>(configuration.GetSection(DemoOptions.SectionName));
@@ -103,6 +105,11 @@ public static class DependencyInjection
         services.AddScoped<IDocumentIngestionService, DocumentIngestionService>();
         services.AddScoped<IRagQueryService, RagQueryService>();
         services.AddScoped<IRerankDiagnostics, RerankDiagnosticsService>();
+
+        // --- BYOK cevap-üreten LLM çözücü: kullanıcı kendi sağlayıcı+anahtarını verirse
+        // (OpenAI/Gemini/Grok) cevap onun LLM'inden üretilir. Embedding HER ZAMAN havuzda kalır.
+        services.AddHttpClient(UserLlmResolver.HttpClientName, c => c.Timeout = TimeSpan.FromMinutes(2));
+        services.AddScoped<IUserLlmResolver, UserLlmResolver>();
 
         // --- Multi-turn konuşma hafızası ---
         services.AddScoped<IConversationStore, PgConversationStore>();

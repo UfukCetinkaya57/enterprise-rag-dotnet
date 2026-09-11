@@ -115,12 +115,20 @@
       </summary>
       <p class="lim" style="margin:10px 0 8px;color:var(--muted);font-size:12.5px;line-height:1.5">
         Ücretsiz demo, ortak bir Gemini anahtar havuzunu paylaşır ve yoğunlukta limitlenebilir.
-        Kendi Google Gemini anahtarınızı girerseniz istekleriniz sizin kotanızdan gider —
+        Kendi anahtarınızı girerseniz cevaplar sizin seçtiğiniz modelden, sizin kotanızdan üretilir —
         anahtar yalnızca tarayıcınızda saklanır, sunucuda kaydedilmez veya loglanmaz.
+        (Dokümanların aranması her zaman ücretsiz havuzla yapılır.)
       </p>
+      <div class="askrow" style="margin-bottom:8px">
+        <select id="aiProvider" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:12px 10px;font-size:14px;outline:none">
+          <option value="gemini">Google Gemini</option>
+          <option value="openai">OpenAI (GPT)</option>
+          <option value="grok">xAI Grok</option>
+        </select>
+        <input type="text" id="apiKey" placeholder="API anahtarınız" autocomplete="off" spellcheck="false" style="flex:1" />
+      </div>
       <div class="askrow">
-        <input type="text" id="apiKey" placeholder="Gemini API anahtarı (AIza…)" autocomplete="off" spellcheck="false" />
-        <button class="primary" id="saveKey">Kaydet</button>
+        <button class="primary" id="saveKey" style="flex:1">Kaydet</button>
       </div>
       <div class="status" id="keyStatus"></div>
     </details>
@@ -165,9 +173,11 @@ function renderSources(list){
   sourcesEl.style.display = 'block';
 }
 
-// BYOK anahtarı — yalnızca tarayıcıda (localStorage). Sunucuya sadece header ile, istek anında gider.
+// BYOK anahtarı + sağlayıcı — yalnızca tarayıcıda (localStorage). Sunucuya sadece header ile gider.
 const KEY_STORE = 'rag_user_api_key';
+const PROVIDER_STORE = 'rag_user_ai_provider';
 function getUserKey(){ try { return localStorage.getItem(KEY_STORE) || ''; } catch { return ''; } }
+function getUserProvider(){ try { return localStorage.getItem(PROVIDER_STORE) || 'gemini'; } catch { return 'gemini'; } }
 
 function ask(question){
   if (!question.trim() || streaming) return;
@@ -214,7 +224,11 @@ async function askViaPost(question, userKey){
   try {
     const r = await fetch('/api/chat', {
       method:'POST',
-      headers:{ 'Content-Type':'application/json', 'X-User-Api-Key':userKey },
+      headers:{
+        'Content-Type':'application/json',
+        'X-User-Api-Key':userKey,
+        'X-User-Ai-Provider':getUserProvider()
+      },
       body: JSON.stringify({ question })
     });
     const m = await r.json().catch(()=>({}));
@@ -229,25 +243,28 @@ async function askViaPost(question, userKey){
   finally { streaming=false; $('#ask').disabled=false; }
 }
 
-// --- BYOK anahtar yönetimi (yalnızca localStorage) ---
+// --- BYOK anahtar + sağlayıcı yönetimi (yalnızca localStorage) ---
 (function initByok(){
-  const input = $('#apiKey'), status = $('#keyStatus'), summary = $('#byokBox summary');
+  const input = $('#apiKey'), sel = $('#aiProvider'), status = $('#keyStatus'), summary = $('#byokBox summary');
+  const names = { gemini:'Google Gemini', openai:'OpenAI', grok:'xAI Grok' };
   function reflect(){
     const has = !!getUserKey();
+    const prov = names[getUserProvider()] || 'seçili sağlayıcı';
     status.className = 'status' + (has ? ' ok' : '');
     status.textContent = has
-      ? '✔ Kendi anahtarınız kullanılıyor. (Kaldırmak için alanı boşaltıp Kaydet\'e basın.)'
+      ? `✔ Cevaplar ${prov} anahtarınızla üretiliyor. (Kaldırmak için alanı boşaltıp Kaydet'e basın.)`
       : '';
-    if (has) summary.innerHTML = '🔑 Kendi API anahtarınız etkin ✔ — düzenlemek için tıklayın';
-    else summary.innerHTML = '🔑 Kendi API anahtarınızı kullanın (isteğe bağlı) — günlük demo limitini aşın';
+    if (has) summary.innerHTML = `🔑 ${prov} anahtarınız etkin ✔ — düzenlemek için tıklayın`;
+    else summary.innerHTML = '🔑 Kendi API anahtarınızı kullanın (isteğe bağlı) — istediğiniz modeli seçin';
   }
   input.value = getUserKey();
+  sel.value = getUserProvider();
   reflect();
   $('#saveKey').onclick = () => {
     const v = input.value.trim();
     try {
-      if (v) localStorage.setItem(KEY_STORE, v);
-      else localStorage.removeItem(KEY_STORE);
+      if (v) { localStorage.setItem(KEY_STORE, v); localStorage.setItem(PROVIDER_STORE, sel.value); }
+      else { localStorage.removeItem(KEY_STORE); localStorage.removeItem(PROVIDER_STORE); }
     } catch {}
     reflect();
   };

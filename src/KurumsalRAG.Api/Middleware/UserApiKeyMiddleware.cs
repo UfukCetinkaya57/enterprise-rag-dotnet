@@ -8,7 +8,9 @@ namespace KurumsalRAG.Api.Middleware;
 public sealed class UserApiKeyMiddleware
 {
     public const string HeaderName = "X-User-Api-Key";
+    public const string ProviderHeaderName = "X-User-Ai-Provider";
     public const string ItemKey = "UserApiKey";
+    public const string ProviderItemKey = "UserAiProvider";
 
     private readonly RequestDelegate _next;
 
@@ -21,6 +23,14 @@ public sealed class UserApiKeyMiddleware
             var key = value.ToString().Trim();
             if (!string.IsNullOrWhiteSpace(key))
                 context.Items[ItemKey] = key;
+        }
+
+        // Sağlayıcı seçimi (openai|gemini|grok) — anahtarla birlikte cevap-üreten LLM'i belirler.
+        if (context.Request.Headers.TryGetValue(ProviderHeaderName, out var provider))
+        {
+            var p = provider.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(p))
+                context.Items[ProviderItemKey] = p;
         }
 
         await _next(context);

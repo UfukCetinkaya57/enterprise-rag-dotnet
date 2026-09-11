@@ -12,4 +12,11 @@ public interface IUserApiKeyAccessor
 {
     /// <summary>Kullanıcının verdiği API anahtarı; yoksa null (ücretsiz havuz kullanılır).</summary>
     string? UserApiKey { get; }
+
+    /// <summary>
+    /// Kullanıcının seçtiği sağlayıcı ('X-User-Ai-Provider' header'ı): "openai" | "gemini" | "grok".
+    /// Anahtar varsa cevap-üretimi (LLM) bu sağlayıcıya gider. Boşsa/null ise varsayılan davranış
+    /// (BYOK Gemini anahtarı olarak yorumlanır — geriye uyumluluk). Embedding HER ZAMAN havuzdadır.
+    /// </summary>
+    string? UserProvider { get; }
 }

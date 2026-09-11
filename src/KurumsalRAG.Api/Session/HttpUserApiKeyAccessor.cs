@@ -15,17 +15,18 @@ public sealed class HttpUserApiKeyAccessor : IUserApiKeyAccessor
     public HttpUserApiKeyAccessor(IHttpContextAccessor httpContextAccessor)
         => _httpContextAccessor = httpContextAccessor;
 
-    public string? UserApiKey
+    public string? UserApiKey => Read(UserApiKeyMiddleware.ItemKey);
+
+    public string? UserProvider => Read(UserApiKeyMiddleware.ProviderItemKey);
+
+    private string? Read(string itemKey)
     {
-        get
+        var ctx = _httpContextAccessor.HttpContext;
+        if (ctx is not null && ctx.Items.TryGetValue(itemKey, out var value)
+            && value is string s && !string.IsNullOrWhiteSpace(s))
         {
-            var ctx = _httpContextAccessor.HttpContext;
-            if (ctx is not null && ctx.Items.TryGetValue(UserApiKeyMiddleware.ItemKey, out var value)
-                && value is string key && !string.IsNullOrWhiteSpace(key))
-            {
-                return key;
-            }
-            return null; // BYOK verilmedi → ücretsiz havuz kullanılır.
+            return s;
         }
+        return null;
     }
 }

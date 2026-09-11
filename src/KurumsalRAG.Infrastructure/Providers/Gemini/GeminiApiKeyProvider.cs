@@ -40,8 +40,13 @@ public sealed class GeminiApiKeyProvider : IApiKeyProvider
     public ApiKeyLease Acquire()
     {
         // 1) BYOK — kullanıcı kendi anahtarını verdiyse onu kullan (havuz yönetimi dışı).
+        // BYOK anahtarı YALNIZCA kullanıcı Gemini seçtiyse (veya sağlayıcı belirtmediyse — eski
+        // davranış) Gemini'ye anahtar olarak kullanılır. Kullanıcı OpenAI/Grok seçtiyse o anahtar
+        // onların; Gemini embedding'ine KOYULMAMALI (aksi halde 400/401). Bu durumda havuza düşülür,
+        // böylece embedding hep bizim ücretsiz Gemini havuzumuzla çalışır (embedding değişmez).
         var byok = _userKey.UserApiKey;
-        if (!string.IsNullOrWhiteSpace(byok))
+        var provider = (_userKey.UserProvider ?? "gemini").Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(byok) && provider == "gemini")
             return new ApiKeyLease(byok, IsByok: true, PoolIndex: -1);
 
         if (_pool.Count == 0)

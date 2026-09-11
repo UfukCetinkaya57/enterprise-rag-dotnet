@@ -30,7 +30,7 @@ public sealed class RagQueryServiceTests
             new FakePromptGuard(), new FakeEmbedding(), store, new FakeReranker(),
             llm, new FakeFaithfulness(), cache, budget, new FakeSession(sessionId),
             conversation ?? new FakeConversationStore(), rewriter ?? new FakeQueryRewriter(),
-            rag, demo, NullLogger<RagQueryService>.Instance);
+            new FakeUserLlmResolver(), rag, demo, NullLogger<RagQueryService>.Instance);
     }
 
     [Fact]
@@ -151,7 +151,8 @@ public sealed class RagQueryServiceTests
         var svc = new RagQueryService(
             new FakePromptGuard(), new FakeEmbedding(), new FakeVectorStore(), new FakeReranker(),
             llm, new FakeFaithfulness(), new FakeCache(null), new FakeBudget(), new FakeSession("u"),
-            conv, new FakeQueryRewriter(), rag, demo, NullLogger<RagQueryService>.Instance);
+            conv, new FakeQueryRewriter(), new FakeUserLlmResolver(), rag, demo,
+            NullLogger<RagQueryService>.Instance);
 
         await svc.AskAsync("alakasız soru");
 

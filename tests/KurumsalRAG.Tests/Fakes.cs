@@ -135,6 +135,14 @@ internal sealed class FakeConversationStore : IConversationStore
         => Task.FromResult<IReadOnlyList<ConversationTurn>>(_turns.TakeLast(count).ToArray());
 }
 
+// Varsayılan: BYOK yok → null döner, RagQueryService havuz LLM'ini kullanır.
+internal sealed class FakeUserLlmResolver : IUserLlmResolver
+{
+    private readonly ILlmProvider? _byok;
+    public FakeUserLlmResolver(ILlmProvider? byok = null) => _byok = byok;
+    public ILlmProvider? Resolve() => _byok;
+}
+
 internal sealed class FakeQueryRewriter : IQueryRewriter
 {
     public string? LastRewrittenFrom { get; private set; }
