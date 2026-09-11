@@ -26,6 +26,10 @@ builder.Services.AddHealthChecks().AddCheck<RagHealthCheck>("rag");
 // Session: HttpContext üzerinden ISessionAccessor.
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ISessionAccessor, HttpSessionAccessor>();
+// BYOK: 'X-User-Api-Key' header'ını HttpContext üzerinden okuyan accessor.
+// SINGLETON: yalnızca IHttpContextAccessor'a bağlı (her erişimde güncel HttpContext'i okur),
+// bu yüzden singleton GeminiApiKeyProvider'a güvenle enjekte edilir (captive dependency yok).
+builder.Services.AddSingleton<IUserApiKeyAccessor, HttpUserApiKeyAccessor>();
 
 // Global hata yönetimi (ProblemDetails, stack trace sızdırmaz).
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
@@ -52,6 +56,8 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.UseMiddleware<SessionCookieMiddleware>();
+// BYOK: 'X-User-Api-Key' header'ını istek scope'una taşı (varsa) — provider anahtar seçiminde kullanır.
+app.UseMiddleware<UserApiKeyMiddleware>();
 // DB tabanlı (restart-dayanıklı) IP rate limiting — session'dan sonra, controller'dan önce.
 app.UseMiddleware<IpRateLimitMiddleware>();
 
@@ -72,6 +78,11 @@ static void BindSecretsFromEnvironment(WebApplicationBuilder builder)
     var geminiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
     if (!string.IsNullOrWhiteSpace(geminiKey))
         builder.Configuration[$"{GeminiOptions.SectionName}:ApiKey"] = geminiKey;
+
+    // Çoklu-anahtar havuzu (BYOK dışı ücretsiz rotasyon): virgülle ayrılmış N anahtar.
+    var geminiKeys = Environment.GetEnvironmentVariable("GEMINI_API_KEYS");
+    if (!string.IsNullOrWhiteSpace(geminiKeys))
+        builder.Configuration[$"{GeminiOptions.SectionName}:ApiKeys"] = geminiKeys;
 
     var host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost";
     var port = Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432";

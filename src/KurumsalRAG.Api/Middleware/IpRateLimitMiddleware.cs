@@ -30,6 +30,16 @@ public sealed class IpRateLimitMiddleware
             return;
         }
 
+        // BYOK: kullanıcı kendi API anahtarını verdiyse chat sorguları kendi kotasından gider —
+        // demo Query limitini uygulamayız (UI'daki "günlük demo limitini aşın" vaadi). Upload yine
+        // limitli kalır (yükleme kaynak-yoğun ve suistimale açık; BYOK ile ilgisiz).
+        if (scope == RateScope.Query
+            && context.Items.ContainsKey(UserApiKeyMiddleware.ItemKey))
+        {
+            await _next(context);
+            return;
+        }
+
         var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var limit = scope == RateScope.Upload ? demo.Value.Ip.UploadsPerDay : demo.Value.Ip.QueriesPerDay;
 

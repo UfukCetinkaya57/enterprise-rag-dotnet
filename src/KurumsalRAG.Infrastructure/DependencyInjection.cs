@@ -66,12 +66,23 @@ public static class DependencyInjection
         // Sağlayıcıyı değiştirmek = tek config satırı; iş mantığı hiç değişmez.
         if (providerOptions.IsGemini)
         {
-            // Gemini: auth header'lı + 429 retry'lı typed HttpClient.
+            // BYOK + çoklu-anahtar rotasyonu: anahtar seçimi (BYOK önceliği, round-robin, 429/503
+            // cooldown) singleton provider'da; her istekte GeminiAuthHandler header'a yazar.
+            services.AddSingleton<IApiKeyProvider, GeminiApiKeyProvider>();
+            services.AddTransient<GeminiAuthHandler>();
+
+            // Gemini: retry(DIŞTA) → auth handler(İÇTE). Handler'lar kayıt sırasına göre dıştan içe
+            // çalışır; retry'ı önce kaydediyoruz ki HER retry denemesinde GeminiAuthHandler taze bir
+            // anahtar seçsin (503/429'da bir sonraki havuz anahtarına failover). Sıra yanlış olursa
+            // (auth dışta) retry hep aynı dolu anahtarı dener → rotasyon işlemez.
             services.AddHttpClient<IEmbeddingProvider, GeminiEmbeddingProvider>(ConfigureGeminiClient)
-                .AddPolicyHandler(RetryPolicy());
+                .AddPolicyHandler(RetryPolicy())
+                .AddHttpMessageHandler<GeminiAuthHandler>();
             services.AddHttpClient<ILlmProvider, GeminiLlmProvider>(ConfigureGeminiClient)
-                .AddPolicyHandler(RetryPolicy());
-            services.AddHttpClient<IProviderHealthProbe, GeminiHealthProbe>();
+                .AddPolicyHandler(RetryPolicy())
+                .AddHttpMessageHandler<GeminiAuthHandler>();
+            services.AddHttpClient<IProviderHealthProbe, GeminiHealthProbe>(ConfigureGeminiClient)
+                .AddHttpMessageHandler<GeminiAuthHandler>();
         }
         else
         {
@@ -174,7 +185,8 @@ public static class DependencyInjection
         var options = sp.GetRequiredService<IOptions<GeminiOptions>>().Value;
         // BaseAddress sonuna "/" — relative path'ler ("models/...:generateContent") doğru çözülsün.
         client.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/");
-        client.DefaultRequestHeaders.Add("x-goog-api-key", options.ApiKey);
+        // NOT: 'x-goog-api-key' burada SET EDİLMEZ — GeminiAuthHandler her istekte ekler
+        // (BYOK önceliği + çoklu-anahtar rotasyonu için anahtar istek anında seçilir).
         client.Timeout = TimeSpan.FromMinutes(2);
     }
 

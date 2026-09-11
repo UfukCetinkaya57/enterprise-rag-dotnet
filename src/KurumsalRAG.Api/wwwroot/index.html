@@ -108,6 +108,24 @@
     <div class="status" id="upStatus"></div>
   </div>
 
+  <div class="card">
+    <details id="byokBox">
+      <summary style="cursor:pointer;color:var(--muted);font-size:13.5px;list-style:none">
+        🔑 Kendi API anahtarınızı kullanın (isteğe bağlı) — günlük demo limitini aşın
+      </summary>
+      <p class="lim" style="margin:10px 0 8px;color:var(--muted);font-size:12.5px;line-height:1.5">
+        Ücretsiz demo, ortak bir Gemini anahtar havuzunu paylaşır ve yoğunlukta limitlenebilir.
+        Kendi Google Gemini anahtarınızı girerseniz istekleriniz sizin kotanızdan gider —
+        anahtar yalnızca tarayıcınızda saklanır, sunucuda kaydedilmez veya loglanmaz.
+      </p>
+      <div class="askrow">
+        <input type="text" id="apiKey" placeholder="Gemini API anahtarı (AIza…)" autocomplete="off" spellcheck="false" />
+        <button class="primary" id="saveKey">Kaydet</button>
+      </div>
+      <div class="status" id="keyStatus"></div>
+    </details>
+  </div>
+
   <footer>Anonim demo · günlük kullanım limitleri uygulanır · veriler 24 saat sonra silinir</footer>
 </div>
 
@@ -147,8 +165,17 @@ function renderSources(list){
   sourcesEl.style.display = 'block';
 }
 
+// BYOK anahtarı — yalnızca tarayıcıda (localStorage). Sunucuya sadece header ile, istek anında gider.
+const KEY_STORE = 'rag_user_api_key';
+function getUserKey(){ try { return localStorage.getItem(KEY_STORE) || ''; } catch { return ''; } }
+
 function ask(question){
   if (!question.trim() || streaming) return;
+
+  // BYOK varsa: EventSource custom header gönderemez → non-stream POST + X-User-Api-Key kullan.
+  const userKey = getUserKey();
+  if (userKey) { askViaPost(question, userKey); return; }
+
   streaming = true; $('#ask').disabled = true;
   answerCard.style.display = 'block';
   badgesEl.innerHTML = ''; sourcesEl.style.display='none';
@@ -177,6 +204,54 @@ function ask(question){
   function finish(){ streaming=false; $('#ask').disabled=false; if(es){es.close(); es=null;}
     answerEl.innerHTML = citeHtml(buf) || answerEl.textContent; }
 }
+
+// BYOK yolu: streaming yerine tek POST (EventSource header gönderemez). Anahtar header'da gider.
+async function askViaPost(question, userKey){
+  streaming = true; $('#ask').disabled = true;
+  answerCard.style.display = 'block';
+  badgesEl.innerHTML = ''; sourcesEl.style.display='none';
+  answerEl.innerHTML = '<span class="cursor"></span>';
+  try {
+    const r = await fetch('/api/chat', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'X-User-Api-Key':userKey },
+      body: JSON.stringify({ question })
+    });
+    const m = await r.json().catch(()=>({}));
+    if (r.ok && typeof m.answer === 'string'){
+      answerEl.innerHTML = citeHtml(m.answer);
+      setBadges({type:m.type, cached:m.cached, limited:m.limited, score:m.observability?.faithfulnessScore});
+      renderSources(m.sources || []);
+    } else {
+      answerEl.textContent = m.title || m.detail || 'İstek başarısız oldu.';
+    }
+  } catch { answerEl.textContent = 'İstek sırasında hata oluştu.'; }
+  finally { streaming=false; $('#ask').disabled=false; }
+}
+
+// --- BYOK anahtar yönetimi (yalnızca localStorage) ---
+(function initByok(){
+  const input = $('#apiKey'), status = $('#keyStatus'), summary = $('#byokBox summary');
+  function reflect(){
+    const has = !!getUserKey();
+    status.className = 'status' + (has ? ' ok' : '');
+    status.textContent = has
+      ? '✔ Kendi anahtarınız kullanılıyor. (Kaldırmak için alanı boşaltıp Kaydet\'e basın.)'
+      : '';
+    if (has) summary.innerHTML = '🔑 Kendi API anahtarınız etkin ✔ — düzenlemek için tıklayın';
+    else summary.innerHTML = '🔑 Kendi API anahtarınızı kullanın (isteğe bağlı) — günlük demo limitini aşın';
+  }
+  input.value = getUserKey();
+  reflect();
+  $('#saveKey').onclick = () => {
+    const v = input.value.trim();
+    try {
+      if (v) localStorage.setItem(KEY_STORE, v);
+      else localStorage.removeItem(KEY_STORE);
+    } catch {}
+    reflect();
+  };
+})();
 
 $('#ask').onclick = () => ask($('#q').value);
 $('#q').addEventListener('keydown', e => { if (e.key==='Enter') ask($('#q').value); });

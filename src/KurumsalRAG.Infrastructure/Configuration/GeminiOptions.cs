@@ -11,6 +11,33 @@ public sealed class GeminiOptions
     /// <summary>API anahtarı — .env / GEMINI_API_KEY'den gelir, appsettings'te DURMAZ.</summary>
     public string ApiKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Çoklu anahtar havuzu — .env / GEMINI_API_KEYS'ten (virgülle ayrılmış, N adet).
+    /// Rotasyon + failover için: bir anahtar 429/503 dolunca sonrakine geçilir.
+    /// Boşsa tekil <see cref="ApiKey"/>'e düşülür (geriye uyumluluk).
+    /// </summary>
+    public string ApiKeys { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Bir anahtar 429/503 aldığında kaç saniye pas geçileceği (cooldown). Dolan anahtarı
+    /// ısrarla denememek için; süre sonunda havuza geri döner. Free-tier RPM ~dakika penceresi.
+    /// </summary>
+    public int KeyCooldownSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Havuzdaki tüm anahtarları (çoklu + tekil) tekilleştirip döndürür. Sıra korunur.
+    /// GEMINI_API_KEYS öncelikli; boşsa GEMINI_API_KEY. İkisi de doluysa birleştirilir.
+    /// </summary>
+    public IReadOnlyList<string> ResolveKeyPool()
+    {
+        var keys = new List<string>();
+        foreach (var k in ApiKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            keys.Add(k);
+        if (!string.IsNullOrWhiteSpace(ApiKey))
+            keys.Add(ApiKey.Trim());
+        return keys.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
     public string BaseUrl { get; init; } = "https://generativelanguage.googleapis.com/v1beta";
 
     /// <summary>Embedding modeli. output_dimensionality ile boyut sabitlenir.</summary>

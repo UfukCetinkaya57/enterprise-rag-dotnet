@@ -23,8 +23,9 @@ public sealed class GeminiHealthProbe : IProviderHealthProbe
     {
         try
         {
+            // 'x-goog-api-key' GeminiAuthHandler tarafından eklenir (BYOK/havuz rotasyonu).
+            // Burada absolute URL kullanıyoruz; anahtar seçimi handler'a bırakılır.
             using var req = new HttpRequestMessage(HttpMethod.Get, $"{_options.BaseUrl.TrimEnd('/')}/models");
-            req.Headers.Add("x-goog-api-key", _options.ApiKey);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(5));
             using var resp = await _http.SendAsync(req, cts.Token);
