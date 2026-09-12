@@ -60,6 +60,22 @@ public sealed class CacheOptions
 {
     /// <summary>Yanıt cache'i TTL (saat).</summary>
     public int TtlHours { get; init; } = 24;
+
+    /// <summary>
+    /// Cache sağlayıcısı: "Postgres" (varsayılan, ek altyapı gerektirmez) veya "Redis"
+    /// (dağıtık, düşük gecikme). Port aynı (<see cref="Abstractions.IResponseCache"/>);
+    /// yalnızca implementasyon değişir.
+    /// </summary>
+    public string Provider { get; init; } = "Postgres";
+
+    /// <summary>Redis bağlantı dizesi (Provider=Redis ise). .env / REDIS_CONNECTION'dan gelir.</summary>
+    public string RedisConnection { get; init; } = "localhost:6379";
+
+    /// <summary>
+    /// Redis anahtar öneki — paylaşımlı bir Redis'te (birden çok uygulama) çakışmayı önler.
+    /// Bu projenin tüm anahtarları bu önekle yazılır.
+    /// </summary>
+    public string RedisKeyPrefix { get; init; } = "rag:cache:";
 }
 
 public sealed class UploadOptions

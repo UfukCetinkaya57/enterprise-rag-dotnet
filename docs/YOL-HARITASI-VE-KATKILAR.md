@@ -19,8 +19,9 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 | 5 | Multi-turn konuşma hafızası + query rewriting | ✅ Canlı | "Peki ya X?" takip soruları çalışır |
 | 6 | Çok-sağlayıcılı BYOK (OpenAI/Gemini/Grok) | ✅ Canlı | Kullanıcı cevap modelini seçer; embedding sabit |
 | 7 | Swagger/OpenAPI + CI/CD + integration test | ✅ Canlı | Self-dokümante API + yeşil CI + gerçek-DB testleri |
+| 8 | Redis cache + Cohere cross-encoder reranker | ✅ | Dağıtık cache + gerçek cross-encoder, ikisi de config-seçilebilir |
 
-**Test durumu:** 41 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
+**Test durumu:** 46 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
 **Mimari ilke:** Her özellik bir *port* (interface) arkasında; somut sağlayıcı değişse iş mantığı değişmez.
 
 ---
@@ -132,6 +133,24 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 
 ---
 
+## 8. Redis Cache + Cohere Cross-Encoder Reranker
+
+**Problem:** (a) Cache tek-node Postgres'te — dağıtık/düşük-gecikme senaryosu yok. (b) Reranker'lar bi-encoder (cosine) skoruna dayanıyor; gerçek bir cross-encoder daha isabetli sıralar.
+
+**Çözüm — iki config-seçilebilir adapter (mevcut port'ların arkasına):**
+
+- **Redis cache** (`Cache:Provider = Postgres | Redis`): `IResponseCache`'in Redis implementasyonu. TTL Redis expiry ile (ayrı temizlik yok). Paylaşımlı Redis'te `RedisKeyPrefix` ile izolasyon. Demo'da Postgres varsayılan kalır.
+- **Cohere cross-encoder** (`Retrieval:RerankerType = Llm | Hybrid | Cohere`): `IReranker`'ın Cohere Rerank API adapter'ı. Bi-encoder'da soru ve doküman ayrı embed edilir; **cross-encoder ikisini birlikte** değerlendirip alaka skoru üretir → daha isabetli. Bedeli: soru başına 1 dış çağrı (kotalı). Demo'da Hybrid (kotasız) varsayılan.
+
+**Dayanıklılık (kod incelemesinden gelen kritik ders):** İkisi de **opsiyonel iyileştirme**, zorunluluk değil — bu yüzden ikisinde de graceful degradation:
+- Redis erişilemezse → `AbortOnConnectFail=false` + try/catch → cache **miss** olarak devam (istek çökmez).
+- Cohere API hata/kota dönerse → **retrieval sırasıyla** ilk top-n (rerank atlanır, istek çökmez).
+- Cohere `top_n`, aday sayısını aşamaz → `Math.Min` ile clamp (küçük setlerde rerank sessizce atlanmasın).
+
+**Mülakatta:** "Cache/reranking'i nasıl ölçeklerdin?" → "Cache'i port arkasında tuttuğum için Postgres'ten Redis'e geçiş tek config; TTL'i Redis expiry'sine devrettim. Reranking'de gerçek cross-encoder (Cohere) ekledim — bi-encoder cosine'dan farklı olarak query+doc'u birlikte skorlar. İkisini de opsiyonel iyileştirme olarak tasarladım: backend çökse bile ana akış (cache-miss / retrieval-sırası) çalışmaya devam eder."
+
+---
+
 ## Kesişen mühendislik temaları (mülakatta vurgula)
 
 - **Clean Architecture / Ports & Adapters:** Her dış detay (LLM, embedding, vektör store, cache, reranker) bir interface arkasında. Sağlayıcı değişince iş mantığı hiç değişmiyor.
@@ -142,4 +161,4 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 
 ---
 
-*Son güncelleme: 2026-09-13 · Sıradaki: Redis cache + cross-encoder reranker.*
+*Son güncelleme: 2026-09-13 · Yol haritasındaki tüm planlı entegrasyonlar tamamlandı. Sıradakiler açık.*

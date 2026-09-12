@@ -105,6 +105,16 @@ static void BindSecretsFromEnvironment(WebApplicationBuilder builder)
     if (!string.IsNullOrWhiteSpace(geminiKeys))
         builder.Configuration[$"{GeminiOptions.SectionName}:ApiKeys"] = geminiKeys;
 
+    // Redis bağlantısı (Cache:Provider=Redis ise) — .env / REDIS_CONNECTION'dan.
+    var redisConn = Environment.GetEnvironmentVariable("REDIS_CONNECTION");
+    if (!string.IsNullOrWhiteSpace(redisConn))
+        builder.Configuration[$"{DemoOptions.SectionName}:Cache:RedisConnection"] = redisConn;
+
+    // Cohere Rerank anahtarı (RerankerType=Cohere ise) — .env / COHERE_API_KEY'den.
+    var cohereKey = Environment.GetEnvironmentVariable("COHERE_API_KEY");
+    if (!string.IsNullOrWhiteSpace(cohereKey))
+        builder.Configuration[$"{CohereOptions.SectionName}:ApiKey"] = cohereKey;
+
     var host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost";
     var port = Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432";
     var db = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "kurumsalrag";

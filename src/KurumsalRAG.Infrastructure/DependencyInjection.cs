@@ -19,6 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using StackExchange.Redis;
 using Polly;
 using Polly.Extensions.Http;
 using Polly.Timeout;
@@ -116,8 +117,27 @@ public static class DependencyInjection
         // Query rewriter: takip sorusunu geçmişle bağımsız soruya çevirir (retrieval doğruluğu için).
         services.AddScoped<IQueryRewriter, LlmQueryRewriter>();
 
+        // --- Yanıt cache'i: config'ten (Cache:Provider = Postgres | Redis).
+        // Aynı port (IResponseCache); Redis dağıtık/düşük-gecikme, Postgres ek altyapısız.
+        var cacheProvider = configuration
+            .GetSection(DemoOptions.SectionName).GetSection("Cache")["Provider"] ?? "Postgres";
+        if (string.Equals(cacheProvider, "Redis", StringComparison.OrdinalIgnoreCase))
+        {
+            var demoOpts = configuration.GetSection(DemoOptions.SectionName).Get<DemoOptions>() ?? new DemoOptions();
+            // Tek, paylaşılan bağlantı (multiplexer) — thread-safe, singleton önerilir.
+            // AbortOnConnectFail=false: Redis başlangıçta erişilemezse uygulama ÇÖKMEZ; bağlantı
+            // arka planda yeniden denenir, o sırada cache okuma/yazma miss olarak yutulur (graceful).
+            var redisConfig = ConfigurationOptions.Parse(demoOpts.Cache.RedisConnection);
+            redisConfig.AbortOnConnectFail = false;
+            services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConfig));
+            services.AddScoped<IResponseCache, RedisResponseCache>();
+        }
+        else
+        {
+            services.AddScoped<IResponseCache, PgResponseCache>();
+        }
+
         // --- Demo zırhı adapter'ları (hepsi pgvector deposunu paylaşır) ---
-        services.AddScoped<IResponseCache, PgResponseCache>();
         services.AddScoped<ITokenBudgetGuard, PgTokenBudgetStore>();
         services.AddScoped<ISessionQuota, PgSessionQuota>();
         // IP rate limiter: restart-dayanıklı (DB). In-memory FixedWindow yerine.
@@ -135,9 +155,26 @@ public static class DependencyInjection
         var rerankerType = configuration
             .GetSection(RagOptions.SectionName).GetSection("Retrieval")["RerankerType"] ?? "Llm";
         if (string.Equals(rerankerType, "Hybrid", StringComparison.OrdinalIgnoreCase))
+        {
             services.AddScoped<IReranker, HybridReranker>();
+        }
+        else if (string.Equals(rerankerType, "Cohere", StringComparison.OrdinalIgnoreCase))
+        {
+            // Cross-encoder rerank (Cohere Rerank API). Auth header + kısa retry'lı typed HttpClient.
+            services.Configure<CohereOptions>(configuration.GetSection(CohereOptions.SectionName));
+            services.AddHttpClient<IReranker, CohereReranker>((sp, client) =>
+            {
+                var opts = sp.GetRequiredService<IOptions<CohereOptions>>().Value;
+                client.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/");
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", opts.ApiKey);
+                client.Timeout = TimeSpan.FromSeconds(15);
+            }).AddPolicyHandler(RetryPolicy());
+        }
         else
+        {
             services.AddScoped<IReranker, LlmReranker>();
+        }
 
         // --- Faz 4: kural tabanlı prompt injection guard (NoOp'un yerine).
         // İleride LLM-based classifier bu portun arkasına takılabilir. ---
