@@ -6,6 +6,7 @@
     <Project Path="src/KurumsalRAG.Infrastructure/KurumsalRAG.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/KurumsalRAG.IntegrationTests/KurumsalRAG.IntegrationTests.csproj" />
     <Project Path="tests/KurumsalRAG.Tests/KurumsalRAG.Tests.csproj" />
   </Folder>
 </Solution>

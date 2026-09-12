@@ -7,16 +7,18 @@ using Microsoft.Extensions.Options;
 namespace KurumsalRAG.Infrastructure.Providers.Gemini;
 
 /// <summary>
-/// <see cref="IApiKeyProvider"/>'ın Gemini implementasyonu: BYOK önceliği + çoklu-anahtar
-/// havuzunda round-robin seçim + 429/503 failover (cooldown).
+/// <see cref="IApiKeyProvider"/>'ın Gemini implementasyonu: çoklu-anahtar havuzunda round-robin
+/// seçim + 429/503 failover (cooldown). SADECE HAVUZ anahtarlarını yönetir.
 ///
-/// SINGLETON: havuz durumu (round-robin sayacı, cooldown zamanları) istekler arasında
-/// paylaşılır. BYOK anahtarı ise istek scope'undan (<see cref="IUserApiKeyAccessor"/>) okunur
-/// ve havuz yönetiminin tamamen dışındadır.
+/// SINGLETON: havuz durumu (round-robin sayacı, cooldown zamanları) istekler arasında paylaşılır.
+///
+/// ÖNEMLİ: BYOK (kullanıcının kendi anahtarı) burada YÖNETİLMEZ. Bu provider embedding + havuz
+/// LLM'i için kullanılır; embedding HER ZAMAN havuzda kalmalı (vektör boyutu DB'de sabit). Kullanıcı
+/// Gemini'yi kendi anahtarıyla seçse bile onun CEVAP LLM'i ayrı bir HttpClient üzerinden
+/// <see cref="Providers.UserLlmResolver"/> tarafından kurulur — bu yolla asla karışmaz.
 /// </summary>
 public sealed class GeminiApiKeyProvider : IApiKeyProvider
 {
-    private readonly IUserApiKeyAccessor _userKey;
     private readonly ILogger<GeminiApiKeyProvider> _logger;
     private readonly IReadOnlyList<string> _pool;
     private readonly TimeSpan _cooldown;
@@ -26,11 +28,9 @@ public sealed class GeminiApiKeyProvider : IApiKeyProvider
     private int _cursor = -1; // round-robin sayacı (Interlocked ile artırılır)
 
     public GeminiApiKeyProvider(
-        IUserApiKeyAccessor userKey,
         IOptions<GeminiOptions> options,
         ILogger<GeminiApiKeyProvider> logger)
     {
-        _userKey = userKey;
         _logger = logger;
         var opts = options.Value;
         _pool = opts.ResolveKeyPool();
@@ -39,16 +39,7 @@ public sealed class GeminiApiKeyProvider : IApiKeyProvider
 
     public ApiKeyLease Acquire()
     {
-        // 1) BYOK — kullanıcı kendi anahtarını verdiyse onu kullan (havuz yönetimi dışı).
-        // BYOK anahtarı YALNIZCA kullanıcı Gemini seçtiyse (veya sağlayıcı belirtmediyse — eski
-        // davranış) Gemini'ye anahtar olarak kullanılır. Kullanıcı OpenAI/Grok seçtiyse o anahtar
-        // onların; Gemini embedding'ine KOYULMAMALI (aksi halde 400/401). Bu durumda havuza düşülür,
-        // böylece embedding hep bizim ücretsiz Gemini havuzumuzla çalışır (embedding değişmez).
-        var byok = _userKey.UserApiKey;
-        var provider = (_userKey.UserProvider ?? "gemini").Trim().ToLowerInvariant();
-        if (!string.IsNullOrWhiteSpace(byok) && provider == "gemini")
-            return new ApiKeyLease(byok, IsByok: true, PoolIndex: -1);
-
+        // Yalnızca havuz — BYOK burada YOK (embedding hep havuzda; BYOK cevap LLM'i resolver'da).
         if (_pool.Count == 0)
             throw new InvalidOperationException(
                 "Gemini API anahtarı yok: BYOK verilmedi ve havuz (GEMINI_API_KEYS / GEMINI_API_KEY) boş.");

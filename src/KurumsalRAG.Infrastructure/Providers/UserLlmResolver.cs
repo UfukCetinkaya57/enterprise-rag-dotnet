@@ -68,19 +68,23 @@ public sealed class UserLlmResolver : IUserLlmResolver
             "openai" => BuildOpenAiCompatible(key, _openAiDefaults.BaseUrl, _openAiDefaults.ChatModel),
             "grok" => BuildOpenAiCompatible(key, _byok.GrokBaseUrl, _byok.GrokChatModel),
             "gemini" => BuildGemini(key),
-            _ => throw new InvalidApiKeyException() // desteklenmeyen sağlayıcı → net hata
+            // Sağlayıcı adı desteklenmiyor — sorun anahtar değil, seçim (net mesaj).
+            _ => throw new InvalidApiKeyException(
+                $"Desteklenmeyen sağlayıcı: '{provider}'. Geçerli seçenekler: gemini, openai, grok.")
         };
     }
 
     /// <summary>OpenAI ve Grok: aynı Chat Completions API, Bearer auth. Sadece BaseUrl+model farklı.</summary>
     private ILlmProvider BuildOpenAiCompatible(string key, string baseUrl, string model)
     {
+        // Auth + BaseUrl HttpClient'ta (OpenAiLlmProvider bunları client'tan kullanır).
         var http = _httpClientFactory.CreateClient(HttpClientName);
         http.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
 
-        // Havuz OpenAI ayarlarını klonla (tüm tuned alanlar korunur), yalnızca bağlantı+model'i override et.
-        var options = Options.Create(_openAiDefaults with { ApiKey = key, BaseUrl = baseUrl, ChatModel = model });
+        // Options'tan yalnızca ChatModel okunur (auth/BaseUrl HttpClient'ta). Havuz ayarlarını klonlayıp
+        // modeli override ederek diğer tuned alanları (pricing vb.) koruyoruz.
+        var options = Options.Create(_openAiDefaults with { ChatModel = model });
         return new OpenAiLlmProvider(http, options);
     }
 

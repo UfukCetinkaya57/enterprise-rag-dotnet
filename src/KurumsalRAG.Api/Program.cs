@@ -6,6 +6,7 @@ using KurumsalRAG.Application.Configuration;
 using KurumsalRAG.Infrastructure;
 using KurumsalRAG.Infrastructure.Configuration;
 using Microsoft.AspNetCore.HttpOverrides;
+using Scalar.AspNetCore;
 
 // .env'i ortam değişkenlerine yükle (varsa). Secret'lar burada, appsettings'te değil.
 DotNetEnv.Env.TraversePath().Load();
@@ -22,6 +23,21 @@ builder.Services.AddControllers()
         o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHealthChecks().AddCheck<RagHealthCheck>("rag");
+
+// OpenAPI (Swagger) doküman üretimi — endpoint'leri görünür/denenebilir kılar (portfolyo + geliştirme).
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((doc, _, _) =>
+    {
+        doc.Info.Title = "Kurumsal RAG API";
+        doc.Info.Version = "v1";
+        doc.Info.Description =
+            "Provider-agnostik RAG + agentic .NET API. Chat (stream/non-stream), doküman yükleme, " +
+            "sağlık ve (geliştirmede) tanılama uçları. BYOK için 'X-User-Api-Key' + 'X-User-Ai-Provider' " +
+            "header'ları desteklenir.";
+        return Task.CompletedTask;
+    });
+});
 
 // Session: HttpContext üzerinden ISessionAccessor.
 builder.Services.AddHttpContextAccessor();
@@ -65,6 +81,11 @@ app.MapControllers();
 
 // Health: sığ (DB ping) public; derin (provider dahil) yalnızca localhost + ?deep=true.
 app.MapHealthEndpoint();
+
+// OpenAPI JSON (/openapi/v1.json) + Scalar UI (/docs). Not: şema kamuya açık olur; hassas
+// bir kurulumda bunları Development'a veya diagnostics-gate arkasına almak gerekir.
+app.MapOpenApi();
+app.MapScalarApiReference("/docs", options => options.WithTitle("Kurumsal RAG API"));
 
 app.Run();
 

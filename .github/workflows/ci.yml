@@ -1,0 +1,32 @@
+name: CI
+
+# Her push ve PR'da derleme + testler. Portfolyo repo'su için "yeşil rozet" güvencesi.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    # Integration testleri pgvector'ü Testcontainers ile kendisi başlatır (GitHub runner'ında
+    # Docker hazır gelir). Ayrı bir 'services: postgres' bloğuna gerek yok — Testcontainers
+    # her test koşusu için izole bir container yönetir, çakışma olmaz.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: .NET 10 SDK kur
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Bağımlılıkları geri yükle
+        run: dotnet restore
+
+      - name: Derle (Release)
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Testler (unit + integration)
+        run: dotnet test --configuration Release --no-build --verbosity normal

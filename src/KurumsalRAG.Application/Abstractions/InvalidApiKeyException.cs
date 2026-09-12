@@ -11,4 +11,8 @@ public sealed class InvalidApiKeyException : Exception
         : base("Verdiğiniz API anahtarı geçersiz veya reddedildi. Lütfen anahtarınızı kontrol edin.")
     {
     }
+
+    public InvalidApiKeyException(string message) : base(message)
+    {
+    }
 }
