@@ -106,8 +106,9 @@ public sealed class EvaluationHarnessService : IEvaluationHarness
         // 3) Doğruluk — context-içi: gerçek var mı; context-dışı: red etti mi.
         bool answerCorrect;
         if (q.ShouldRefuse)
-            answerCorrect = FactMatcher.Normalize(answer)
-                .Contains(FactMatcher.Normalize(RagPromptBuilder.RefusalText), StringComparison.Ordinal);
+            // Refusal'ı ÇEKİRDEK ifadeyle yakala (tam string değil) — LLM "...bulunmuyor [chunk:1]"
+            // veya "...maaş zammı bilgisi bulunmuyor" gibi üretebilir; hepsi geçerli reddir.
+            answerCorrect = FactMatcher.IsRefusal(answer);
         else
             answerCorrect = FactMatcher.ContainsAny(answer, q.ExpectedFacts);
 

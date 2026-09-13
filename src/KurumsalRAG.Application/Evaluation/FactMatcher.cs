@@ -18,6 +18,21 @@ public static class FactMatcher
         return expectedFacts.Any(f => haystack.Contains(Normalize(f), StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Cevap bir "reddetme" mi (context dışı → "dokümanlarda yok"). LLM refusal metnini kelimesi
+    /// kelimesine üretmeyebilir (ör. "...maaş zammı bilgisi bulunmuyor" veya "...bulunmuyor [chunk:1]").
+    /// Bu yüzden tam string yerine refusal'ın ÇEKİRDEK ifadesini (normalize) ararız.
+    /// </summary>
+    public static bool IsRefusal(string answer)
+    {
+        var normalized = Normalize(answer);
+        // "bilgi bulunmuyor" / "bulunmuyor" / "yer almiyor" / "belirtilmemis" refusal sinyalleri.
+        return normalized.Contains("bulunmuyor", StringComparison.Ordinal)
+            || normalized.Contains("yer almiyor", StringComparison.Ordinal)
+            || normalized.Contains("belirtilmemis", StringComparison.Ordinal)
+            || normalized.Contains("bilgi yok", StringComparison.Ordinal);
+    }
+
     public static string Normalize(string s)
     {
         if (string.IsNullOrEmpty(s))
