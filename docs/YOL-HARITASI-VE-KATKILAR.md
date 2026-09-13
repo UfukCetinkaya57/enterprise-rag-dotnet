@@ -195,7 +195,20 @@ LLM aslında 3 context-dışı soruyu da doğru reddetmişti; eval tam string e�
 - **Görünür hata:** Embedding boyut uyuşmazlığında sessizce "0 benzerlik" (her cümle ayrı chunk) yerine açık hata fırlat.
 - Ondalık koruması: "3.14" ortasındaki nokta cümle sonu sayılmaz.
 
-**Mülakatta:** "Chunking stratejileri?" → "Üçünü de yaptım: sabit-boyut (basit/hızlı), parent-document (small-to-big), semantic (anlam sınırları). Semantic'te ardışık cümle embedding benzerliği düşünce bölüyorum — konu bütünlüğünü korur. Config'ten seçilebilir, eval harness ile hangisinin daha iyi olduğunu ölçebiliyorum."
+**Canlı kıyaslama (3 strateji, aynı seed, eval harness):**
+
+| Strateji | Recall | MRR | Answer | Refusal | Faithfulness | Chunk |
+|---|---|---|---|---|---|---|
+| FixedSize | %100 | 1.00 | %100 | %100 | 0.96 | 7 |
+| **ParentDocument** | %100 | 1.00 | %100 | %100 | **1.00** | 7 |
+| Semantic | %100 | 1.00 | %100 | %100 | 0.92 | 19 |
+
+Kısa seed belgesinde retrieval metrikleri üçünde de tam (retrieval kolay). **Ayırt edici metrik
+faithfulness:** ParentDocument en yüksek (1.00) — LLM'e bütünsel parent bağlamı verdiği için cevaplar
+daha iyi destekleniyor. Semantic kısa belgede çok/küçük chunk (19) üretip bağlamı dağıttı (0.92).
+**Karar: prod'da ParentDocument** (veriye dayalı seçim). Büyük/gerçek dokümanda semantic öne geçebilir.
+
+**Mülakatta:** "Chunking stratejileri?" → "Üçünü de yaptım: sabit-boyut, parent-document (small-to-big), semantic (anlam sınırları). Ama asıl önemlisi: hangisinin daha iyi olduğunu TAHMİN etmedim — eval harness ile aynı belgede üçünü ölçüp faithfulness'a göre ParentDocument'ı seçtim. Strateji config'ten değişir, karar veriye dayanır."
 
 ---
 
