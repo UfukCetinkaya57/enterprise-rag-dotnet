@@ -29,6 +29,9 @@ public static class GoldenSet
         new("Özel sağlık sigortası ne zaman aktive edilir?", ["30 gün", "30"], false),
         new("Zimmetli ekipman işten ayrılışta kaç iş günü içinde iade edilmelidir?", ["5 iş günü", "5 gün", "5"], false),
         new("Kullanılmayan yıllık izin bir sonraki yıla en fazla kaç gün devredilebilir?", ["5 gün", "5"], false),
+        new("Maaşlar ne zaman ödenir?", ["son iş günü", "ayın son"], false),
+        new("Yangın tatbikatı ne sıklıkla yapılır?", ["yılda bir", "yılda 1"], false),
+        new("Son kaç parola tekrar kullanılamaz?", ["5 parola", "son 5"], false),
 
         // --- Context dışı (sistem "dokümanlarda yok" demeli) ---
         new("Şirket araç tahsisi var mı?", [], true),
