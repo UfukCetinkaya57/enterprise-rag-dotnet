@@ -197,20 +197,30 @@ LLM aslında 3 context-dışı soruyu da doğru reddetmişti; eval tam string e�
 - **Görünür hata:** Embedding boyut uyuşmazlığında sessizce "0 benzerlik" (her cümle ayrı chunk) yerine açık hata fırlat.
 - Ondalık koruması: "3.14" ortasındaki nokta cümle sonu sayılmaz.
 
-**Canlı kıyaslama (3 strateji, aynı seed, eval harness):**
+**Canlı kıyaslama (3 strateji, eval harness) — VE en iyinin belgeye göre değiştiğinin kanıtı:**
 
-| Strateji | Recall | MRR | Answer | Refusal | Faithfulness | Chunk |
-|---|---|---|---|---|---|---|
-| FixedSize | %100 | 1.00 | %100 | %100 | 0.96 | 7 |
-| **ParentDocument** | %100 | 1.00 | %100 | %100 | **1.00** | 7 |
-| Semantic | %100 | 1.00 | %100 | %100 | 0.92 | 19 |
+*Kısa belge (tek sayfa, 12 soru):*
 
-Kısa seed belgesinde retrieval metrikleri üçünde de tam (retrieval kolay). **Ayırt edici metrik
-faithfulness:** ParentDocument en yüksek (1.00) — LLM'e bütünsel parent bağlamı verdiği için cevaplar
-daha iyi destekleniyor. Semantic kısa belgede çok/küçük chunk (19) üretip bağlamı dağıttı (0.92).
-**Karar: prod'da ParentDocument** (veriye dayalı seçim). Büyük/gerçek dokümanda semantic öne geçebilir.
+| Strateji | Answer | Faithfulness | Chunk |
+|---|---|---|---|
+| FixedSize | %100 | 0.96 | 7 |
+| **ParentDocument** ✅ | %100 | **1.00** | 7 |
+| Semantic | %100 | 0.92 | 19 |
 
-**Mülakatta:** "Chunking stratejileri?" → "Üçünü de yaptım: sabit-boyut, parent-document (small-to-big), semantic (anlam sınırları). Ama asıl önemlisi: hangisinin daha iyi olduğunu TAHMİN etmedim — eval harness ile aynı belgede üçünü ölçüp faithfulness'a göre ParentDocument'ı seçtim. Strateji config'ten değişir, karar veriye dayanır."
+*Uzun/çok-konulu belge (13 bölümlük İK politikası, 23 soru):*
+
+| Strateji | Answer | Faithfulness | Chunk |
+|---|---|---|---|
+| **FixedSize** ✅ | **%100** | **1.00** | 12 |
+| ParentDocument | %100 | 0.91 | 13 |
+| Semantic | %84 | 1.00 | 21 |
+
+**Ders:** Kazanan strateji **belgeye göre değişti** — kısa belgede ParentDocument (bütünsel bağlam
+faithfulness'ı yükseltti), uzun belgede FixedSize (Semantic çok bölünce answer %84'e düştü,
+ParentDocument'ın büyük bağlamı faithfulness'ı hafif düşürdü). "En iyi chunking" evrensel değil.
+**Karar: uzun-belge senaryosunda FixedSize** (veriye dayalı). Strateji config'ten tek satır.
+
+**Mülakatta:** "Chunking stratejileri?" → "Üçünü de kodladım (sabit-boyut / parent-document / semantic) ama asıl önemlisi: hangisinin iyi olduğunu TAHMİN etmedim. Eval harness ile ölçtüm — ve ilginç bir şey buldum: kısa belgede parent-document, uzun belgede sabit-boyut kazandı. Yani 'en iyi chunking' diye evrensel bir cevap yok; ben ölçüp senaryoya göre seçtim, karar config'ten değişebiliyor."
 
 ---
 

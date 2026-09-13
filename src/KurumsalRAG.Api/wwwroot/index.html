@@ -163,24 +163,26 @@
         📊 Bu RAG nasıl ölçülüyor? — değerlendirme sonuçları
       </summary>
       <p class="lim" style="margin:10px 0 4px;color:var(--muted);font-size:12.5px;line-height:1.5">
-        Yerleşik bir <b>eval harness</b> (RAGAS-tarzı) altın soru setini tüm hattan geçirip
+        Yerleşik bir <b>eval harness</b> (RAGAS-tarzı) altın soru setini (23 soru) tüm hattan geçirip
         kaliteyi sayısallaştırır: <b>Recall@k</b> (doğru parça getirildi mi), <b>MRR</b> (kaçıncı sırada),
         <b>answer accuracy</b>, <b>refusal</b> (bilmiyorum diyebiliyor mu), <b>faithfulness</b> (halüsinasyon yok mu).
-        Aşağıdaki kıyas, chunking stratejisinin <b>tahminle değil ölçümle</b> seçildiğini gösterir:
+        Aşağıdaki kıyas, chunking stratejisinin <b>tahminle değil ölçümle</b> seçildiğini gösterir
+        (13 bölümlük İK politikası belgesi):
       </p>
       <div style="overflow-x:auto">
         <table class="evaltbl">
           <thead><tr><th>Strateji</th><th>Recall</th><th>MRR</th><th>Answer</th><th>Refusal</th><th>Faithfulness</th></tr></thead>
           <tbody>
-            <tr><td>FixedSize</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>0.96</td></tr>
-            <tr class="best"><td>ParentDocument ✓</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>1.00</td></tr>
-            <tr><td>Semantic</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>0.92</td></tr>
+            <tr class="best"><td>FixedSize ✓</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>1.00</td></tr>
+            <tr><td>ParentDocument</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>0.91</td></tr>
+            <tr><td>Semantic</td><td>%100</td><td>1.00</td><td>%84</td><td>%100</td><td>1.00</td></tr>
           </tbody>
         </table>
       </div>
       <p class="lim" style="margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.5">
-        Kısa seed belgesinde retrieval metrikleri tamdır; <b>faithfulness ayırt etti</b> →
-        ParentDocument (bütünsel bağlam) seçildi. Ölçüm ucu: <code>GET /api/diagnostics/eval-suite</code>
+        Uzun belgede <b>FixedSize</b> en dengeli (answer %100 + faithfulness 1.00); Semantic çok bölünce
+        answer %84'e düştü. <b>Kısa belgede ise ParentDocument öndeydi</b> — yani en iyi strateji
+        senaryoya bağlı, önemli olan bunu <b>ölçebilmek</b>. Ölçüm ucu: <code>GET /api/diagnostics/eval-suite</code>
         (production'da güvenlik için kapalı).
       </p>
     </details>

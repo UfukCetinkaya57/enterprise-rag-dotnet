@@ -48,17 +48,24 @@ Bu, iki şeyi mümkün kılar: (1) bir değişikliğin kaliteyi düşürüp dü�
 (regresyon kalkanı), (2) alternatifleri **veriyle** karşılaştırıp seçmek.
 
 **Örnek: 3 chunking stratejisi, aynı belge, canlı ölçüm** — strateji seçimi tahminle değil, bu
-kıyasla yapıldı:
+kıyasla yapıldı. Ve önemli bir ders: **en iyi strateji belgeye bağlı değişir.**
 
-| Strateji | Recall@n | MRR | Answer | Refusal | Faithfulness |
+**Uzun/çok-konulu belge (13 bölümlük İK politikası, 23 soru):**
+
+| Strateji | Recall | MRR | Answer | Refusal | Faithfulness |
 |---|---|---|---|---|---|
-| FixedSize | %100 | 1.00 | %100 | %100 | 0.96 |
-| **ParentDocument** ✅ | %100 | 1.00 | %100 | %100 | **1.00** |
-| Semantic | %100 | 1.00 | %100 | %100 | 0.92 |
+| **FixedSize** ✅ | %100 | 1.00 | **%100** | %100 | **1.00** |
+| ParentDocument | %100 | 1.00 | %100 | %100 | 0.91 |
+| Semantic | %100 | 1.00 | %84 | %100 | 1.00 |
 
-> Kısa seed belgesinde retrieval metrikleri tamdır (retrieval kolay); **faithfulness ayırt etti** →
-> ParentDocument (bütünsel bağlam) seçildi. Büyük/gerçek dokümanda tablo farklılaşabilir — önemli
-> olan, bu kararın **ölçülebilir** olması. → `GET /api/diagnostics/eval-suite`
+Uzun belgede **FixedSize** en dengeli sonucu verdi (answer %100 + faithfulness 1.00). Semantic çok
+sayıda küçük chunk üretince ilgili bilgi bölünüp **answer accuracy %84'e** düştü; ParentDocument'ın
+büyük bağlamı ise faithfulness'ı hafif düşürdü (0.91).
+
+**Kısa belge (tek sayfa) ise farklı kazananı işaret etmişti** — orada ParentDocument (faithfulness
+1.00) öndeydi. Yani "en iyi chunking" evrensel değil: **ölçüp senaryoya göre seçmek gerekir.**
+Buradaki asıl kazanım metriklerin yüksekliği değil, kararın **ölçülebilir/tekrarlanabilir** olması.
+→ `GET /api/diagnostics/eval-suite`
 
 ---
 
