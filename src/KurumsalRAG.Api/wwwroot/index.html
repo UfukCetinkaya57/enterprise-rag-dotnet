@@ -74,6 +74,13 @@
   .metric .v{font-size:17px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;margin-top:2px}
   .metric .v small{font-size:12px;color:var(--muted);font-weight:400}
   .metric.good .v{color:var(--accent2)} .metric.warn .v{color:var(--amber)}
+  /* Değerlendirme kıyas tablosu */
+  .evaltbl{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px}
+  .evaltbl th,.evaltbl td{text-align:center;padding:6px 8px;border-bottom:1px solid var(--border)}
+  .evaltbl th{color:var(--muted);font-weight:600;text-transform:uppercase;font-size:10.5px;letter-spacing:.03em}
+  .evaltbl td:first-child,.evaltbl th:first-child{text-align:left}
+  .evaltbl tr.best{background:#132015}
+  .evaltbl tr.best td{color:var(--accent2);font-weight:600}
 </style>
 </head>
 <body>
@@ -125,6 +132,35 @@
       Yalnızca PDF · en fazla 10 MB · en fazla 50 sayfa · oturum başına 2 doküman.
     </div>
     <div class="status" id="upStatus"></div>
+  </div>
+
+  <div class="card">
+    <details id="evalBox">
+      <summary style="cursor:pointer;color:var(--muted);font-size:13.5px;list-style:none">
+        📊 Bu RAG nasıl ölçülüyor? — değerlendirme sonuçları
+      </summary>
+      <p class="lim" style="margin:10px 0 4px;color:var(--muted);font-size:12.5px;line-height:1.5">
+        Yerleşik bir <b>eval harness</b> (RAGAS-tarzı) altın soru setini tüm hattan geçirip
+        kaliteyi sayısallaştırır: <b>Recall@k</b> (doğru parça getirildi mi), <b>MRR</b> (kaçıncı sırada),
+        <b>answer accuracy</b>, <b>refusal</b> (bilmiyorum diyebiliyor mu), <b>faithfulness</b> (halüsinasyon yok mu).
+        Aşağıdaki kıyas, chunking stratejisinin <b>tahminle değil ölçümle</b> seçildiğini gösterir:
+      </p>
+      <div style="overflow-x:auto">
+        <table class="evaltbl">
+          <thead><tr><th>Strateji</th><th>Recall</th><th>MRR</th><th>Answer</th><th>Refusal</th><th>Faithfulness</th></tr></thead>
+          <tbody>
+            <tr><td>FixedSize</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>0.96</td></tr>
+            <tr class="best"><td>ParentDocument ✓</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>1.00</td></tr>
+            <tr><td>Semantic</td><td>%100</td><td>1.00</td><td>%100</td><td>%100</td><td>0.92</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="lim" style="margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.5">
+        Kısa seed belgesinde retrieval metrikleri tamdır; <b>faithfulness ayırt etti</b> →
+        ParentDocument (bütünsel bağlam) seçildi. Ölçüm ucu: <code>GET /api/diagnostics/eval-suite</code>
+        (production'da güvenlik için kapalı).
+      </p>
+    </details>
   </div>
 
   <div class="card">

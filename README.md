@@ -38,6 +38,30 @@ girdiyi işlemeden önce süzer.
 
 ---
 
+## 📊 Değerlendirme — "ölçülmüş RAG"
+
+Bu sistemin kalitesi **tahmin değil, ölçüm**. Yerleşik bir **eval harness** (RAGAS-tarzı) bir *altın
+soru seti*ni (9 context-içi + 3 context-dışı) tüm hattan geçirip retrieval ve generation kalitesini
+sayısallaştırır: **Recall@k**, **MRR**, **answer accuracy**, **refusal accuracy**, **faithfulness**.
+
+Bu, iki şeyi mümkün kılar: (1) bir değişikliğin kaliteyi düşürüp düşürmediğini yakalamak
+(regresyon kalkanı), (2) alternatifleri **veriyle** karşılaştırıp seçmek.
+
+**Örnek: 3 chunking stratejisi, aynı belge, canlı ölçüm** — strateji seçimi tahminle değil, bu
+kıyasla yapıldı:
+
+| Strateji | Recall@n | MRR | Answer | Refusal | Faithfulness |
+|---|---|---|---|---|---|
+| FixedSize | %100 | 1.00 | %100 | %100 | 0.96 |
+| **ParentDocument** ✅ | %100 | 1.00 | %100 | %100 | **1.00** |
+| Semantic | %100 | 1.00 | %100 | %100 | 0.92 |
+
+> Kısa seed belgesinde retrieval metrikleri tamdır (retrieval kolay); **faithfulness ayırt etti** →
+> ParentDocument (bütünsel bağlam) seçildi. Büyük/gerçek dokümanda tablo farklılaşabilir — önemli
+> olan, bu kararın **ölçülebilir** olması. → `GET /api/diagnostics/eval-suite`
+
+---
+
 ## Mimari
 
 **Clean Architecture — 4 katman.** Bağımlılık yönü içe doğru: `Api → Infrastructure → Application → Domain`.

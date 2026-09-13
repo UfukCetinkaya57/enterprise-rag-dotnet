@@ -23,6 +23,7 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 | 9 | Parent-Document Retrieval (small-to-big) | ✅ Canlı | Küçük child ile ara, LLM'e büyük parent bağlamı ver |
 | 10 | Semantic Chunking | ✅ | Sabit-boyut yerine anlam sınırlarında böl (cümle benzerliği) |
 | 11 | Reflection / self-correction (retrieval-augmented) | ✅ | Düşük faithfulness'ta iddialarla yeniden retrieve + strict yeniden cevap |
+| 12 | Vitrin: observability paneli + README + eval görseli | ✅ Canlı | Sistemi teknik-recruiter/developer için kendini gösteren bir vitrine çevir |
 
 **Test durumu:** 65 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
 **Mimari ilke:** Her özellik bir *port* (interface) arkasında; somut sağlayıcı değişse iş mantığı değişmez.
@@ -231,6 +232,19 @@ Config-kontrollü (`Rag:Reflection:Enabled`); faithfulness gerektirir (free-tier
 - Refusal ("dokümanlarda yok") grounded davranıştır → denetimden/reflection'dan muaf (tek paylaşılan `IsRefusal`).
 
 **Mülakatta:** "Halüsinasyonu nasıl azaltırsın?" → "Üç katman: (1) prompt'ta 'sadece context' + refusal talimatı, (2) faithfulness ile ölçüm, (3) düşükse self-correction — desteklenmeyen iddialarla yeniden retrieve edip strict modda yeniden cevaplıyorum. Düzelmezse kullanıcıya şeffaf uyarı. Ölç → düzelt → şeffaf ol."
+
+---
+
+## 12. Vitrin — sistemi kendini gösteren bir ürüne çevir
+
+**Problem:** Teknik derinlik (11 entegrasyon) var ama bir recruiter/developer bunu hızlıca göremiyordu — demo sadece bir chat kutusuydu, metrikler dosyada gömülüydü, mimari görünmüyordu.
+
+**Çözüm — 3 faz:**
+- **Observability paneli (canlı UI):** `GET /api/system/config` aktif konfigürasyonu (chunking/reranker/hybrid/provider/faithfulness/reflection/cache) rozet şeridiyle gösterir; her cevap sonrası metrik paneli (retrieval/üretim süresi, getirilen→seçilen chunk, faithfulness, token, self-correction). Sistem kendi kendini ölçüp gösteriyor.
+- **README:** Rozetler + canlı demo linki + özellik matrisi + **Mermaid** mimari/pipeline diyagramları + güncel port→adapter tablosu.
+- **Eval görseli:** 3-strateji kıyas tablosu README'de ve UI'da bir "Değerlendirme" kartında — "ölçülmüş RAG" kanıtı.
+
+**Mülakatta:** "Projeni nasıl sunarsın?" → "Sadece kod değil, sistem kendini gösteriyor: canlı demoda her cevabın retrieval süresini, faithfulness'ını, hangi tekniklerin aktif olduğunu görebiliyorsun. README'de mimari Mermaid diyagramları ve ölçülmüş eval sonuçları var. Amaç: teknik biri 30 saniyede 'bu ciddi ve ölçülmüş' desin."
 
 ---
 
