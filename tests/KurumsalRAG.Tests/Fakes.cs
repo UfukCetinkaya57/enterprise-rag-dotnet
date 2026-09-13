@@ -46,6 +46,14 @@ internal sealed class FakeVectorStore : IVectorStore
     public Task<IReadOnlyList<ScoredChunk>> SearchKeywordAsync(
         string query, int topK, IReadOnlyCollection<string> allowedSessionIds, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<ScoredChunk>>([]);
+
+    public Task<IReadOnlyList<DocumentEntity>> ListDocumentsAsync(
+        IReadOnlyCollection<string> allowedSessionIds, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<DocumentEntity>>([]);
+
+    public Task<IReadOnlyList<DocumentChunk>> GetDocumentChunksAsync(
+        Guid documentId, IReadOnlyCollection<string> allowedSessionIds, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<DocumentChunk>>([]);
 }
 
 internal sealed class FakeReranker : IReranker

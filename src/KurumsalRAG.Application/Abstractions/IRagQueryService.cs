@@ -35,7 +35,11 @@ public sealed record RagAnswer(
     public bool Limited => Type == AnswerType.Limited;
 }
 
-public sealed record CitedSource(int Reference, Guid ChunkId, double Score);
+/// <param name="Reference">[chunk:N] atıf numarası (1-tabanlı).</param>
+/// <param name="ChunkId">Kaynak parçanın id'si.</param>
+/// <param name="Score">Alaka skoru (0-1).</param>
+/// <param name="Content">Parçanın gerçek metni — kullanıcı "bu cevap tam olarak buna dayanıyor" görebilsin.</param>
+public sealed record CitedSource(int Reference, Guid ChunkId, double Score, string Content = "");
 
 /// <summary>Cevap başına maliyet + kalite + performans gözlemi (observability paneli için).</summary>
 public sealed record RagObservability(

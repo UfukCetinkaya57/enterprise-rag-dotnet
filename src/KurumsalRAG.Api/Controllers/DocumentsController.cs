@@ -1,6 +1,7 @@
 using KurumsalRAG.Api.Session;
 using KurumsalRAG.Application.Abstractions;
 using KurumsalRAG.Application.Configuration;
+using KurumsalRAG.Application.Sessions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -17,21 +18,82 @@ public sealed class DocumentsController : ControllerBase
     private readonly IDocumentIngestionService _ingestion;
     private readonly ISessionQuota _quota;
     private readonly ISessionAccessor _session;
+    private readonly IVectorStore _vectorStore;
     private readonly UploadOptions _upload;
+    private readonly string _seedSessionId;
     private readonly ILogger<DocumentsController> _logger;
 
     public DocumentsController(
         IDocumentIngestionService ingestion,
         ISessionQuota quota,
         ISessionAccessor session,
+        IVectorStore vectorStore,
         IOptions<DemoOptions> demo,
         ILogger<DocumentsController> logger)
     {
         _ingestion = ingestion;
         _quota = quota;
         _session = session;
+        _vectorStore = vectorStore;
         _upload = demo.Value.Upload;
+        _seedSessionId = demo.Value.SeedSessionId;
         _logger = logger;
+    }
+
+    private string[] AllowedSessions() => SessionScope.Allowed(_session.SessionId, _seedSessionId);
+
+    /// <summary>Bu session'ın görebileceği dokümanları listeler (kendi + seed örnek).</summary>
+    [HttpGet]
+    public async Task<IActionResult> List(CancellationToken cancellationToken)
+    {
+        var docs = await _vectorStore.ListDocumentsAsync(AllowedSessions(), cancellationToken);
+        // Sadece görüntüleme için gerekli alanlar (session_id gibi içerideki detay sızmaz).
+        var items = docs.Select(d => new
+        {
+            id = d.Id,
+            fileName = d.FileName,
+            chunkCount = d.ChunkCount,
+            uploadedAt = d.UploadedAt,
+            isSeed = d.SessionId == _seedSessionId
+        });
+        return Ok(items);
+    }
+
+    /// <summary>Bir dokümanın çıkarılmış tam metnini (chunk'lar birleştirilmiş) döndürür.</summary>
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> Get(Guid id, CancellationToken cancellationToken)
+    {
+        var chunks = await _vectorStore.GetDocumentChunksAsync(id, AllowedSessions(), cancellationToken);
+        if (chunks.Count == 0)
+            return NotFound("Doküman bulunamadı veya bu oturumda erişilebilir değil.");
+
+        // Tam metin: parent-document modunda child'lar overlap içerir ve aynı parent'ı paylaşır →
+        // benzersiz parent bloklarını birleştir (tekrarsız). Aksi halde child'ları sırayla birleştir.
+        var hasParents = chunks.Any(c => !string.IsNullOrEmpty(c.ParentContent));
+        string text;
+        if (hasParents)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var parts = new List<string>();
+            foreach (var c in chunks)
+            {
+                var block = string.IsNullOrEmpty(c.ParentContent) ? c.Content : c.ParentContent;
+                if (seen.Add(block)) parts.Add(block);
+            }
+            text = string.Join("\n\n", parts);
+        }
+        else
+        {
+            text = string.Join("\n\n", chunks.Select(c => c.Content));
+        }
+
+        return Ok(new
+        {
+            id,
+            chunkCount = chunks.Count,
+            chunks = chunks.Select(c => new { index = c.ChunkIndex, content = c.Content }),
+            text
+        });
     }
 
     /// <summary>Bir PDF yükler: sertleştirme → kota → chunk + embed + store (session'a bağlı).</summary>

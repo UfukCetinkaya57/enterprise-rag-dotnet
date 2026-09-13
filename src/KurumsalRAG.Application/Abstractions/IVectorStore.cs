@@ -48,4 +48,18 @@ public interface IVectorStore
 
     /// <summary>DB erişilebilirlik kontrolü (health check).</summary>
     Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Verilen session'lara ait dokümanları listeler (yeni→eski). Session izolasyonu:
+    /// yalnızca kullanıcının kendi + 'seed' dokümanları. Görüntüleme/şeffaflık için.
+    /// </summary>
+    Task<IReadOnlyList<DocumentEntity>> ListDocumentsAsync(
+        IReadOnlyCollection<string> allowedSessionIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bir dokümanın chunk'larını sıra ile (chunk_index) döndürür — çıkarılmış tam metni
+    /// göstermek için. Yalnızca izin verilen session'lara aitse; değilse boş liste (sızıntı yok).
+    /// </summary>
+    Task<IReadOnlyList<DocumentChunk>> GetDocumentChunksAsync(
+        Guid documentId, IReadOnlyCollection<string> allowedSessionIds, CancellationToken cancellationToken = default);
 }

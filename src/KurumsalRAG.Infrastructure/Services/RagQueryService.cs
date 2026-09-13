@@ -534,7 +534,9 @@ public sealed class RagQueryService : IRagQueryService
             reference++;
             var contextText = string.IsNullOrEmpty(parent) ? scored.Chunk.Content : parent;
             retrievedChunks.Add(new RetrievedChunk(reference, scored.Chunk.Id, contextText, scored.Score));
-            sources.Add(new CitedSource(reference, scored.Chunk.Id, scored.Score));
+            // Kaynağa CHILD metnini koy: skor child'a ait, gösterilen metin de child olsun (tutarlı).
+            // Parent bağlam LLM'e gider (retrievedChunks) ama kullanıcıya gösterilen atıf birimi child'dır.
+            sources.Add(new CitedSource(reference, scored.Chunk.Id, scored.Score, scored.Chunk.Content));
         }
         return (new RetrievedContext(retrievedChunks), sources);
     }

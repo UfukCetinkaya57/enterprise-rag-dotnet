@@ -57,6 +57,39 @@ public sealed class ApiIntegrationTests : IClassFixture<RagWebApplicationFactory
     }
 
     [Fact]
+    public async Task Documents_list_includes_seed_and_text_is_viewable()
+    {
+        var client = _factory.CreateClient();
+
+        // Seed doküman listelenmeli (görüntüleme/şeffaflık).
+        var listResp = await client.GetAsync("/api/documents");
+        listResp.EnsureSuccessStatusCode();
+        var docs = await listResp.Content.ReadFromJsonAsync<List<DocItem>>();
+        Assert.NotNull(docs);
+        var seed = docs!.FirstOrDefault(d => d.IsSeed);
+        Assert.NotNull(seed);                          // seed örnek belge var
+        Assert.True(seed!.ChunkCount > 0);
+
+        // Belgenin çıkarılmış metni alınabilmeli ve gerçek içerik dönmeli.
+        var getResp = await client.GetAsync($"/api/documents/{seed.Id}");
+        getResp.EnsureSuccessStatusCode();
+        var doc = await getResp.Content.ReadFromJsonAsync<DocDetail>();
+        Assert.NotNull(doc);
+        Assert.False(string.IsNullOrWhiteSpace(doc!.Text));
+        Assert.Contains("Aurora", doc.Text);           // seed belgenin bilinen içeriği
+    }
+
+    [Fact]
+    public async Task Foreign_document_id_is_not_leaked()
+    {
+        var client = _factory.CreateClient();
+
+        // Rastgele/başka bir doküman id'si → 404 (session izolasyonu: sızıntı yok).
+        var resp = await client.GetAsync($"/api/documents/{Guid.NewGuid()}");
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task Chat_empty_question_returns_bad_request()
     {
         var client = _factory.CreateClient();
@@ -80,4 +113,6 @@ public sealed class ApiIntegrationTests : IClassFixture<RagWebApplicationFactory
 
     private sealed record ChatResponse(string Answer, List<Source> Sources, string Type);
     private sealed record Source(int Reference, string ChunkId, double Score);
+    private sealed record DocItem(string Id, string FileName, int ChunkCount, bool IsSeed);
+    private sealed record DocDetail(string Id, int ChunkCount, string Text);
 }

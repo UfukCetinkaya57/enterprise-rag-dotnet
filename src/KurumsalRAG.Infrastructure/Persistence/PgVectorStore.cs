@@ -193,4 +193,73 @@ public sealed class PgVectorStore : IVectorStore
             return false;
         }
     }
+
+    public async Task<IReadOnlyList<DocumentEntity>> ListDocumentsAsync(
+        IReadOnlyCollection<string> allowedSessionIds, CancellationToken cancellationToken = default)
+    {
+        if (allowedSessionIds.Count == 0)
+            return [];
+
+        const string sql = """
+            SELECT id, session_id, file_name, file_bytes, uploaded_at, chunk_count
+            FROM documents
+            WHERE session_id = ANY(@sessions)
+            ORDER BY uploaded_at DESC
+            """;
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("sessions", allowedSessionIds.ToArray());
+
+        var docs = new List<DocumentEntity>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            docs.Add(new DocumentEntity
+            {
+                Id = reader.GetGuid(0),
+                SessionId = reader.GetString(1),
+                FileName = reader.GetString(2),
+                FileBytes = reader.GetInt64(3),
+                UploadedAt = reader.GetFieldValue<DateTimeOffset>(4),
+                ChunkCount = reader.GetInt32(5)
+            });
+        }
+        return docs;
+    }
+
+    public async Task<IReadOnlyList<DocumentChunk>> GetDocumentChunksAsync(
+        Guid documentId, IReadOnlyCollection<string> allowedSessionIds, CancellationToken cancellationToken = default)
+    {
+        if (allowedSessionIds.Count == 0)
+            return [];
+
+        // Session filtresi WHERE'de: başka session'ın belgesi istense bile boş döner (sızıntı yok).
+        const string sql = """
+            SELECT id, document_id, session_id, content, chunk_index, token_count, parent_content
+            FROM chunks
+            WHERE document_id = @doc AND session_id = ANY(@sessions)
+            ORDER BY chunk_index ASC
+            """;
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("doc", documentId);
+        cmd.Parameters.AddWithValue("sessions", allowedSessionIds.ToArray());
+
+        var chunks = new List<DocumentChunk>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            chunks.Add(new DocumentChunk
+            {
+                Id = reader.GetGuid(0),
+                DocumentId = reader.GetGuid(1),
+                SessionId = reader.GetString(2),
+                Content = reader.GetString(3),
+                ChunkIndex = reader.GetInt32(4),
+                TokenCount = reader.GetInt32(5),
+                ParentContent = reader.IsDBNull(6) ? null : reader.GetString(6)
+            });
+        }
+        return chunks;
+    }
 }

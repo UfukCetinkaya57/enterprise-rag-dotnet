@@ -65,6 +65,11 @@
   .src .bar{flex:1;height:6px;background:var(--border);border-radius:999px;overflow:hidden}
   .src .bar > i{display:block;height:100%;background:var(--accent);border-radius:999px}
   .src .pct{color:var(--muted);font-variant-numeric:tabular-nums;flex-shrink:0;min-width:64px;text-align:right}
+  .src.clickable{cursor:pointer} .src.clickable:hover{border-color:var(--accent)}
+  .src .toggle{color:var(--accent);font-size:11.5px;flex-shrink:0}
+  .src-text{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;margin:-2px 0 8px;font-size:12.5px;color:var(--muted);
+    white-space:pre-wrap;line-height:1.5;max-height:240px;overflow-y:auto}
   .up{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .up label{font-size:13.5px;color:var(--muted)}
   .up input[type=file]{font-size:13px;color:var(--muted)}
@@ -98,6 +103,24 @@
   .evaltbl td:first-child,.evaltbl th:first-child{text-align:left}
   .evaltbl tr.best{background:#132015}
   .evaltbl tr.best td{color:var(--accent2);font-weight:600}
+  /* Doküman listesi satırları */
+  .doc{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--border);
+    border-radius:8px;padding:9px 12px;margin-bottom:6px;cursor:pointer;transition:.15s}
+  .doc:hover{border-color:var(--accent)}
+  .doc .di{font-size:16px;flex-shrink:0}
+  .doc .dn{flex:1;font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .doc .dm{font-size:11.5px;color:var(--muted);flex-shrink:0}
+  .doc .seed{font-size:10.5px;color:var(--accent2);border:1px solid #2c5a35;background:#132015;
+    border-radius:6px;padding:2px 7px;flex-shrink:0}
+  /* Modal */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;place-items:center;z-index:50;padding:16px}
+  .modal-box{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    max-width:760px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;
+    border-bottom:1px solid var(--border);font-weight:600}
+  .modal-head button{background:none;border:0;color:var(--muted);font-size:18px;cursor:pointer;line-height:1}
+  .modal-head button:hover{color:var(--text)}
+  .modal-body{padding:16px;overflow-y:auto;white-space:pre-wrap;font-size:13.5px;line-height:1.6;color:var(--text)}
 </style>
 </head>
 <body>
@@ -129,6 +152,15 @@
       <input type="text" id="q" placeholder="Dokümana bir soru sorun…" autocomplete="off" />
       <button class="primary" id="ask">Sor</button>
     </div>
+  </div>
+
+  <!-- Bu oturumun dokümanları (seed örnek + kullanıcının yükledikleri) — tıklayınca metni açılır -->
+  <div class="card" id="docsCard" style="display:none">
+    <h3 style="font-size:13px;color:var(--muted);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em">Dokümanlar</h3>
+    <p class="lim" style="margin:0 0 10px;color:var(--muted);font-size:12px">
+      Sistemin soru-cevap için kullandığı belgeler. Tıklayınca çıkarılan metni (sistemin gerçekten okuduğu) görebilirsiniz.
+    </p>
+    <div id="docsList"></div>
   </div>
 
   <div class="card" id="answerCard" style="display:none">
@@ -221,6 +253,17 @@
   </footer>
 </div>
 
+<!-- Doküman metni modal'ı -->
+<div id="docModal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="docModalTitle"></span>
+      <button id="docModalClose" title="Kapat">✕</button>
+    </div>
+    <div id="docModalBody" class="modal-body"></div>
+  </div>
+</div>
+
 <script>
 const $ = s => document.querySelector(s);
 const answerCard = $('#answerCard'), answerEl = $('#answer'),
@@ -254,6 +297,48 @@ async function loadConfig(){
   } catch {}
 }
 
+// Bu oturumun dokümanlarını listele (seed + kullanıcının). Tıklayınca metin modal'ı açılır.
+async function loadDocs(){
+  const listEl = $('#docsList'), card = $('#docsCard');
+  try {
+    const r = await fetch('/api/documents');
+    if (!r.ok){ card.style.display='none'; return; }
+    const docs = await r.json();
+    if (!docs.length){ card.style.display='none'; return; }
+    listEl.innerHTML = '';
+    for (const d of docs){
+      const row = document.createElement('div');
+      row.className = 'doc';
+      row.innerHTML = `<span class="di">📄</span>`
+        + `<span class="dn">${esc(d.fileName)}</span>`
+        + (d.isSeed ? `<span class="seed">örnek</span>` : '')
+        + `<span class="dm">${d.chunkCount} parça</span>`;
+      row.onclick = () => openDoc(d.id, d.fileName);
+      listEl.appendChild(row);
+    }
+    card.style.display = 'block';
+  } catch {}
+}
+
+// Doküman metnini modal'da göster (sistemin gerçekten okuduğu çıkarılmış metin).
+async function openDoc(id, name){
+  const modal = $('#docModal'), body = $('#docModalBody'), title = $('#docModalTitle');
+  title.textContent = name;
+  body.textContent = 'Yükleniyor…';
+  modal.hidden = false;
+  try {
+    const r = await fetch('/api/documents/' + encodeURIComponent(id));
+    const d = await r.json();
+    body.textContent = (r.ok && d.text) ? d.text : 'Metin alınamadı.';
+  } catch { body.textContent = 'Metin alınamadı.'; }
+}
+(function initDocModal(){
+  const modal = $('#docModal');
+  $('#docModalClose').onclick = () => modal.hidden = true;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.hidden = true; });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') modal.hidden = true; });
+})();
+
 // Cevap başına performans/kalite metriklerini panelde göster.
 function renderMetrics(o){
   if (!o){ metricsEl.style.display='none'; return; }
@@ -285,17 +370,34 @@ function setBadges({type, cached, limited, score}){
   }
 }
 
+function esc(t){ return (t||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
 function renderSources(list){
   if (!list || !list.length){ sourcesEl.style.display='none'; return; }
   srcList.innerHTML = '';
   for (const s of list){
     const pct = Math.max(0, Math.min(100, Math.round(Number(s.score) * 100)));
+    const hasText = s.content && s.content.trim().length;
+    const wrap = document.createElement('div');
     const row = document.createElement('div');
-    row.className = 'src';
+    row.className = 'src' + (hasText ? ' clickable' : '');
     row.innerHTML = `<span class="ref">[chunk:${s.reference}]</span>`
       + `<span class="bar"><i style="width:${pct}%"></i></span>`
-      + `<span class="pct">%${pct} alaka</span>`;
-    srcList.appendChild(row);
+      + `<span class="pct">%${pct} alaka</span>`
+      + (hasText ? `<span class="toggle">metni gör ▾</span>` : '');
+    wrap.appendChild(row);
+    if (hasText){
+      // Cevabın gerçekten dayandığı parçanın metni — tıklayınca aç/kapa (RAG şeffaflığı).
+      const body = document.createElement('div');
+      body.className = 'src-text'; body.hidden = true;
+      body.textContent = s.content;
+      row.onclick = () => {
+        body.hidden = !body.hidden;
+        row.querySelector('.toggle').textContent = body.hidden ? 'metni gör ▾' : 'gizle ▴';
+      };
+      wrap.appendChild(body);
+    }
+    srcList.appendChild(wrap);
   }
   sourcesEl.style.display = 'block';
 }
@@ -418,6 +520,7 @@ $('#upload').onclick = async () => {
     if (r.ok){
       st.className = 'status ok';
       st.textContent = `✔ "${body.fileName}" yüklendi — ${body.chunkCount} parça. Artık bu dokümana da soru sorabilirsiniz.`;
+      loadDocs(); // yeni belge listede görünsün
     } else {
       st.className = 'status err';
       st.textContent = '⚠ ' + (body.title || body.detail || body || 'Yükleme reddedildi.');
@@ -427,6 +530,7 @@ $('#upload').onclick = async () => {
 
 // Sayfa açılınca aktif sistem konfigürasyonunu göster.
 loadConfig();
+loadDocs();
 </script>
 </body>
 </html>
