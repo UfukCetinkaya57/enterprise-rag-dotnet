@@ -165,7 +165,18 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 - `ParentMaxTokens <= MaxTokens` yanlış config → parent≈child, özellik anlamsızlaşır → ingestion'da uyarı.
 - Config-seçilebilir (`Chunking:Strategy = FixedSize | ParentDocument`); strateji değişince re-ingest gerekir (belgelendi).
 
-**Mülakatta:** "Chunk boyutunu nasıl seçersin?" → "İkilem var: küçük chunk iyi retrieval, büyük chunk iyi bağlam. Parent-document retrieval ile ikisini ayırdım — küçük child ile arıyorum (isabet), LLM'e büyük parent'ı veriyorum (tam cevap). Aynı parent'a düşen child'ları context'te tekilliyorum ki token israf olmasın."
+**Canlı ölçüm (eval harness, parent-document AKTİF, prod seed):**
+Recall@n=**%100** · MRR=**1.00** · Answer accuracy=**%100** · Refusal accuracy=**%100** · Faithfulness=**1.00**.
+Örnek: "Uzaktan çalışma kuralları neler?" → tek parent kaynağından hibrit model + haftada 2 gün +
+çekirdek günler (Pzt/Perş) + 3 iş günü önce talep — hepsi bir arada (FixedSize'da bu detaylar
+farklı küçük chunk'lara dağılırdı).
+
+**Yan bulgu (eval harness kalibrasyonu):** İlk ölçümde refusal accuracy %33 çıktı — ama incelenince
+LLM aslında 3 context-dışı soruyu da doğru reddetmişti; eval tam string eşleşme aradığı için
+"...bulunmuyor [chunk:1]" gibi varyasyonları kaçırıyordu. `FactMatcher.IsRefusal` ile refusal'ı
+çekirdek ifadeyle yakalayınca %100'e düzeldi. (Ölçüm aracının kendisini de doğrulamak gerektiğinin örneği.)
+
+**Mülakatta:** "Chunk boyutunu nasıl seçersin?" → "İkilem var: küçük chunk iyi retrieval, büyük chunk iyi bağlam. Parent-document retrieval ile ikisini ayırdım — küçük child ile arıyorum (isabet), LLM'e büyük parent'ı veriyorum (tam cevap). Aynı parent'a düşen child'ları context'te tekilliyorum ki token israf olmasın. Eval harness ile ölçtüm: parent-document ile recall/answer accuracy/faithfulness tam puan."
 
 ---
 
