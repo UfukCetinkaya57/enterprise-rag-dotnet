@@ -37,14 +37,17 @@ public sealed record RagAnswer(
 
 public sealed record CitedSource(int Reference, Guid ChunkId, double Score);
 
-/// <summary>Cevap başına maliyet + kalite gözlemi.</summary>
+/// <summary>Cevap başına maliyet + kalite + performans gözlemi (observability paneli için).</summary>
 public sealed record RagObservability(
     int RetrievedCount,
     int RerankedCount,
     int PromptTokens,
     int CompletionTokens,
     double? FaithfulnessScore = null,
-    bool PromptGuardTriggered = false)
+    bool PromptGuardTriggered = false,
+    int RetrievalMs = 0,        // embed + arama + rerank süresi
+    int GenerationMs = 0,       // LLM cevap üretim süresi
+    bool ReflectionApplied = false) // self-correction devreye girdi mi
 {
     public int TotalTokens => PromptTokens + CompletionTokens;
 }

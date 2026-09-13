@@ -114,10 +114,14 @@ public sealed class RagQueryService : IRagQueryService
             }
         }
 
+        // Observability: retrieval ve generation sürelerini ölç (panelde gösterilir).
+        var retrievalSw = System.Diagnostics.Stopwatch.StartNew();
         var (context, sources, embeddingTokens, safeQuestion) =
             await RetrieveContextAsync(guard, history, cancellationToken);
+        retrievalSw.Stop();
         var messages = RagPromptBuilder.Build(guard.SanitizedInput, context, history);
 
+        var generationSw = System.Diagnostics.Stopwatch.StartNew();
         LlmCompletion completion;
         try
         {
@@ -132,10 +136,13 @@ public sealed class RagQueryService : IRagQueryService
                 [], new RagObservability(0, 0, 0, 0), AnswerType.Limited);
         }
 
+        generationSw.Stop();
+
         // answerText: kaydedilecek/cache'lenecek TEMİZ cevap (uyarı banner'ı buraya EKLENMEZ).
         var answerText = completion.Content;
         var extraTokens = 0;
         var lowGroundedness = false;
+        var reflectionApplied = false;
 
         double? faithfulnessScore = null;
         if (_options.Faithfulness.Enabled && !context.IsEmpty && !RagPromptBuilder.IsRefusal(answerText))
@@ -152,6 +159,7 @@ public sealed class RagQueryService : IRagQueryService
                 // tutarlı >=). safeQuestion + history thread'lenir ki multi-turn'de retrieval bozulmasın.
                 if (_options.Reflection.Enabled)
                 {
+                    reflectionApplied = true;
                     var (correctedAnswer, correctedEval, correctedSources, reflectTokens) =
                         await SelfCorrectAsync(safeQuestion, history, answerText, eval, activeLlm, cancellationToken);
                     extraTokens += reflectTokens;
@@ -179,7 +187,10 @@ public sealed class RagQueryService : IRagQueryService
             PromptTokens: completion.Usage.PromptTokens,
             CompletionTokens: completion.Usage.CompletionTokens,
             FaithfulnessScore: faithfulnessScore,
-            PromptGuardTriggered: guard.IsSuspicious);
+            PromptGuardTriggered: guard.IsSuspicious,
+            RetrievalMs: (int)retrievalSw.ElapsedMilliseconds,
+            GenerationMs: (int)generationSw.ElapsedMilliseconds,
+            ReflectionApplied: reflectionApplied);
 
         // Cache'le: yalnızca multi-turn KAPALIYKEN. Açıkken cache okuması hep atlanır
         // (ilk turdan sonra geçmiş dolar), o yüzden yazmak ölü kayıt olur.

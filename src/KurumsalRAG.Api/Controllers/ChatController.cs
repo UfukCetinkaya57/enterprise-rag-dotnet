@@ -59,7 +59,9 @@ public sealed class ChatController : ControllerBase
                         cached = chunk.Final.Cached,
                         limited = chunk.Final.Limited,
                         sources = chunk.Final.Sources,
-                        faithfulnessScore = chunk.Final.Observability.FaithfulnessScore
+                        faithfulnessScore = chunk.Final.Observability.FaithfulnessScore,
+                        // Observability paneli için: performans + hangi tekniklerin devreye girdiği.
+                        observability = chunk.Final.Observability
                     }, Json), cancellationToken);
                     break;
             }

@@ -60,12 +60,29 @@
   @keyframes blink{50%{opacity:0}}
   footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
   a{color:var(--accent)}
+  /* Aktif konfigürasyon rozet şeridi — sistem nasıl çalışıyor (developer/recruiter için) */
+  .config{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 16px}
+  .cfg{font-size:11.5px;font-weight:600;border-radius:6px;padding:4px 9px;border:1px solid var(--border);
+    background:var(--panel2);color:var(--muted)}
+  .cfg b{color:var(--text);font-weight:600}
+  .cfg.on{border-color:#2c5a35;background:#132015;color:var(--accent2)}
+  /* Metrik paneli — her cevabın performans/kalite ölçümü */
+  .metrics{margin-top:14px;border-top:1px solid var(--border);padding-top:12px;
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+  .metric{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+  .metric .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+  .metric .v{font-size:17px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;margin-top:2px}
+  .metric .v small{font-size:12px;color:var(--muted);font-weight:400}
+  .metric.good .v{color:var(--accent2)} .metric.warn .v{color:var(--amber)}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Kurumsal Doküman Asistanı</h1>
   <p class="sub">.NET · RAG + Semantic Kernel · pgvector · kaynak-atıflı, groundedness denetimli cevaplar</p>
+
+  <!-- Aktif sistem konfigürasyonu (canlı /api/system/config'ten) — hangi teknikler devrede -->
+  <div class="config" id="config"></div>
 
   <div class="note">
     ✔ Örnek bir şirket politikası dokümanı zaten yüklü — hemen soru sorabilirsiniz.
@@ -87,6 +104,8 @@
   <div class="card" id="answerCard" style="display:none">
     <div class="badges" id="badges"></div>
     <div class="answer" id="answer"></div>
+    <!-- Cevap başına performans/kalite metrikleri (observability) -->
+    <div class="metrics" id="metrics" style="display:none"></div>
     <div class="sources" id="sources" style="display:none">
       <h3>Kaynak parçalar</h3>
       <p class="hint">Cevap, dokümanın bu parçalarına dayanıyor. Cevaptaki
@@ -140,11 +159,54 @@
 <script>
 const $ = s => document.querySelector(s);
 const answerCard = $('#answerCard'), answerEl = $('#answer'),
-      badgesEl = $('#badges'), sourcesEl = $('#sources'), srcList = $('#srcList');
+      badgesEl = $('#badges'), sourcesEl = $('#sources'), srcList = $('#srcList'),
+      metricsEl = $('#metrics'), configEl = $('#config');
 let streaming = false, es = null;
 
 function citeHtml(t){
   return t.replace(/\[chunk:(\d+)\]/g, '<span class="cite">[chunk:$1]</span>');
+}
+
+// Aktif sistem konfigürasyonunu çek ve rozet şeridi olarak göster (sayfa yüklenince bir kez).
+async function loadConfig(){
+  try {
+    const r = await fetch('/api/system/config');
+    if (!r.ok) return;
+    const c = await r.json();
+    const on = b => b ? ' on' : '';
+    const chips = [
+      `<span class="cfg">Sağlayıcı: <b>${c.provider}</b></span>`,
+      `<span class="cfg">Chunking: <b>${c.chunking.strategy}</b></span>`,
+      `<span class="cfg">Reranker: <b>${c.retrieval.reranker}</b></span>`,
+      `<span class="cfg${on(c.retrieval.hybrid)}">Hybrid ${c.retrieval.hybrid?'✔':'✗'}</span>`,
+      `<span class="cfg${on(c.quality.faithfulness)}">Faithfulness ${c.quality.faithfulness?'✔':'✗'}</span>`,
+      `<span class="cfg${on(c.quality.reflection)}">Reflection ${c.quality.reflection?'✔':'✗'}</span>`,
+      `<span class="cfg${on(c.quality.conversation)}">Multi-turn ${c.quality.conversation?'✔':'✗'}</span>`,
+      `<span class="cfg">Cache: <b>${c.cache}</b></span>`,
+      `<span class="cfg">top-k/n: <b>${c.retrieval.topK}/${c.retrieval.topN}</b></span>`,
+    ];
+    configEl.innerHTML = chips.join('');
+  } catch {}
+}
+
+// Cevap başına performans/kalite metriklerini panelde göster.
+function renderMetrics(o){
+  if (!o){ metricsEl.style.display='none'; return; }
+  const cell = (k, v, cls='') => `<div class="metric ${cls}"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const cells = [];
+  if (o.retrievalMs != null)  cells.push(cell('Retrieval', `${o.retrievalMs}<small> ms</small>`));
+  if (o.generationMs != null) cells.push(cell('Üretim (LLM)', `${o.generationMs}<small> ms</small>`));
+  if (o.retrievedCount != null) cells.push(cell('Getirilen → seçilen', `${o.retrievedCount} <small>→</small> ${o.rerankedCount}`));
+  if (typeof o.faithfulnessScore === 'number'){
+    const pct = Math.round(o.faithfulnessScore*100);
+    cells.push(cell('Faithfulness', `%${pct}`, pct>=70?'good':'warn'));
+  }
+  const totalTok = (o.promptTokens||0) + (o.completionTokens||0);
+  if (totalTok > 0) cells.push(cell('Token', `${totalTok}`));
+  if (o.reflectionApplied) cells.push(cell('Self-correction', 'devrede', 'good'));
+  if (!cells.length){ metricsEl.style.display='none'; return; }
+  metricsEl.innerHTML = cells.join('');
+  metricsEl.style.display = 'grid';
 }
 
 function setBadges({type, cached, limited, score}){
@@ -188,7 +250,7 @@ function ask(question){
 
   streaming = true; $('#ask').disabled = true;
   answerCard.style.display = 'block';
-  badgesEl.innerHTML = ''; sourcesEl.style.display='none';
+  badgesEl.innerHTML = ''; sourcesEl.style.display='none'; metricsEl.style.display='none';
   answerEl.innerHTML = '<span class="cursor"></span>';
   let buf = '';
 
@@ -203,6 +265,7 @@ function ask(question){
     const m = JSON.parse(e.data);
     setBadges({type:m.type, cached:m.cached, limited:m.limited, score:m.faithfulnessScore});
     renderSources(m.sources);
+    renderMetrics(m.observability);
   });
   es.addEventListener('error', e => {
     if (e.data) { answerEl.textContent = e.data; }
@@ -219,7 +282,7 @@ function ask(question){
 async function askViaPost(question, userKey){
   streaming = true; $('#ask').disabled = true;
   answerCard.style.display = 'block';
-  badgesEl.innerHTML = ''; sourcesEl.style.display='none';
+  badgesEl.innerHTML = ''; sourcesEl.style.display='none'; metricsEl.style.display='none';
   answerEl.innerHTML = '<span class="cursor"></span>';
   try {
     const r = await fetch('/api/chat', {
@@ -236,6 +299,7 @@ async function askViaPost(question, userKey){
       answerEl.innerHTML = citeHtml(m.answer);
       setBadges({type:m.type, cached:m.cached, limited:m.limited, score:m.observability?.faithfulnessScore});
       renderSources(m.sources || []);
+      renderMetrics(m.observability);
     } else {
       answerEl.textContent = m.title || m.detail || 'İstek başarısız oldu.';
     }
@@ -295,6 +359,9 @@ $('#upload').onclick = async () => {
     }
   } catch(err){ st.className='status err'; st.textContent = '⚠ Yükleme sırasında hata oluştu.'; }
 };
+
+// Sayfa açılınca aktif sistem konfigürasyonunu göster.
+loadConfig();
 </script>
 </body>
 </html>
