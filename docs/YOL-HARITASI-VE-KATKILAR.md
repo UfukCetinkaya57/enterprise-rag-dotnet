@@ -22,8 +22,9 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 | 8 | Redis cache + Cohere cross-encoder reranker | ✅ | Dağıtık cache + gerçek cross-encoder, ikisi de config-seçilebilir |
 | 9 | Parent-Document Retrieval (small-to-big) | ✅ Canlı | Küçük child ile ara, LLM'e büyük parent bağlamı ver |
 | 10 | Semantic Chunking | ✅ | Sabit-boyut yerine anlam sınırlarında böl (cümle benzerliği) |
+| 11 | Reflection / self-correction (retrieval-augmented) | ✅ | Düşük faithfulness'ta iddialarla yeniden retrieve + strict yeniden cevap |
 
-**Test durumu:** 63 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
+**Test durumu:** 65 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
 **Mimari ilke:** Her özellik bir *port* (interface) arkasında; somut sağlayıcı değişse iş mantığı değişmez.
 
 ---
@@ -209,6 +210,27 @@ daha iyi destekleniyor. Semantic kısa belgede çok/küçük chunk (19) üretip 
 **Karar: prod'da ParentDocument** (veriye dayalı seçim). Büyük/gerçek dokümanda semantic öne geçebilir.
 
 **Mülakatta:** "Chunking stratejileri?" → "Üçünü de yaptım: sabit-boyut, parent-document (small-to-big), semantic (anlam sınırları). Ama asıl önemlisi: hangisinin daha iyi olduğunu TAHMİN etmedim — eval harness ile aynı belgede üçünü ölçüp faithfulness'a göre ParentDocument'ı seçtim. Strateji config'ten değişir, karar veriye dayanır."
+
+---
+
+## 11. Reflection / Self-Correction (retrieval-augmented)
+
+**Problem:** LLM bazen context'te olmayan şeyler uydurur (halüsinasyon). Faithsizliği ölçüyoruz (faithfulness) ama ölçmek yetmez — sistem **kendini düzeltebilmeli**.
+
+**Çözüm — retrieval-augmented self-correction:** Cevap üretildikten sonra faithfulness eşik altındaysa:
+1. Denetçinin işaretlediği **desteklenmeyen iddiaları** al
+2. Bu iddiaları sorguya ekleyerek **yeniden retrieve et** (eksik bilgiyi hedefleyen farklı/daha çok chunk)
+3. Genişletilmiş context ile **strict modda** (context'e katı sadakat talimatı) yeniden cevapla
+4. Yeniden ölç; skor iyileştiyse düzeltilmiş cevabı benimse, yoksa şeffaf bir uyarı ekle
+
+Config-kontrollü (`Rag:Reflection:Enabled`); faithfulness gerektirir (free-tier'da dikkat). Ana chat akışına eklendi (önceden yalnızca agentic/diagnostics yolunda vardı) ve retrieval-augmented hale getirildi.
+
+**Teknik incelikler (kod incelemesinden):**
+- Multi-turn'de self-correction **history-rewritten** soruyla retrieve eder + geçmişi korur (ham takip sorusu değil) — yoksa bağlamsız retrieval.
+- Düşük-groundedness uyarısı yalnızca kullanıcıya dönen yanıta eklenir; **cache/geçmişe TEMİZ cevap** yazılır (sonraki turları kirletmez).
+- Refusal ("dokümanlarda yok") grounded davranıştır → denetimden/reflection'dan muaf (tek paylaşılan `IsRefusal`).
+
+**Mülakatta:** "Halüsinasyonu nasıl azaltırsın?" → "Üç katman: (1) prompt'ta 'sadece context' + refusal talimatı, (2) faithfulness ile ölçüm, (3) düşükse self-correction — desteklenmeyen iddialarla yeniden retrieve edip strict modda yeniden cevaplıyorum. Düzelmezse kullanıcıya şeffaf uyarı. Ölç → düzelt → şeffaf ol."
 
 ---
 

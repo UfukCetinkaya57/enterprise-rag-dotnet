@@ -13,6 +13,20 @@ public sealed class RagOptions
     public FaithfulnessOptions Faithfulness { get; init; } = new();
     public SecurityOptions Security { get; init; } = new();
     public ConversationOptions Conversation { get; init; } = new();
+    public ReflectionOptions Reflection { get; init; } = new();
+}
+
+public sealed class ReflectionOptions
+{
+    /// <summary>
+    /// Self-correction'ı açar. Faithfulness eşik altındaysa (halüsinasyon riski) sistem kendini
+    /// düzeltir: desteklenmeyen iddialarla YENİDEN retrieve edip strict modda yeniden cevaplar.
+    /// Ekstra LLM+embedding çağrısı yapar → faithfulness açıkken anlamlı (free-tier'da dikkat).
+    /// </summary>
+    public bool Enabled { get; init; } = false;
+
+    /// <summary>En fazla kaç self-correction denemesi (sonsuz döngü koruması). 1 önerilir.</summary>
+    public int MaxAttempts { get; init; } = 1;
 }
 
 public sealed class ConversationOptions

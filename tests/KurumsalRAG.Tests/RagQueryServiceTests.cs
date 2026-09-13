@@ -13,7 +13,9 @@ public sealed class RagQueryServiceTests
         CachedAnswer? cacheHit = null, bool demoEnabled = true, bool withinBudget = true,
         string sessionId = "user-1",
         bool conversationEnabled = false, FakeConversationStore? conversation = null,
-        FakeQueryRewriter? rewriter = null, FakeVectorStore? vectorStore = null)
+        FakeQueryRewriter? rewriter = null, FakeVectorStore? vectorStore = null,
+        bool faithfulnessEnabled = false, bool reflectionEnabled = false,
+        FakeFaithfulness? faithfulness = null)
     {
         llm = new FakeLlm();
         store = vectorStore ?? new FakeVectorStore();
@@ -22,13 +24,15 @@ public sealed class RagQueryServiceTests
 
         var rag = Options.Create(new RagOptions
         {
-            Conversation = new ConversationOptions { Enabled = conversationEnabled, HistoryWindow = 5 }
+            Conversation = new ConversationOptions { Enabled = conversationEnabled, HistoryWindow = 5 },
+            Faithfulness = new FaithfulnessOptions { Enabled = faithfulnessEnabled, Threshold = 0.7 },
+            Reflection = new ReflectionOptions { Enabled = reflectionEnabled, MaxAttempts = 1 }
         });
         var demo = Options.Create(new DemoOptions { Enabled = demoEnabled, SeedSessionId = "seed" });
 
         return new RagQueryService(
             new FakePromptGuard(), new FakeEmbedding(), store, new FakeReranker(),
-            llm, new FakeFaithfulness(), cache, budget, new FakeSession(sessionId),
+            llm, faithfulness ?? new FakeFaithfulness(), cache, budget, new FakeSession(sessionId),
             conversation ?? new FakeConversationStore(), rewriter ?? new FakeQueryRewriter(),
             new FakeUserLlmResolver(), rag, demo, NullLogger<RagQueryService>.Instance);
     }
@@ -115,6 +119,41 @@ public sealed class RagQueryServiceTests
         await svc.AskAsync("soru");
 
         Assert.Equal(["seed"], store.LastAllowedSessions);
+    }
+
+    // --- Reflection / self-correction ---
+
+    [Fact]
+    public async Task Reflection_dusuk_faithfulness_te_yeniden_deneyip_daha_iyisini_alir()
+    {
+        // İlk skor düşük (0.4, fail) → self-correction → ikinci skor yüksek (0.9, pass).
+        var faith = new FakeFaithfulness(
+            new FaithfulnessResult(0.4, ["desteklenmeyen iddia"], Passed: false),
+            new FaithfulnessResult(0.9, [], Passed: true));
+        var svc = Build(out var llm, out _, out _, out _,
+            faithfulnessEnabled: true, reflectionEnabled: true, faithfulness: faith);
+
+        var answer = await svc.AskAsync("Yıllık izin kaç gün?");
+
+        Assert.True(faith.EvaluateCalls >= 2);              // reflection tetiklendi (yeniden ölçüm)
+        Assert.Equal(2, llm.CompleteCalls);                 // ilk cevap + strict yeniden cevap
+        Assert.Equal(0.9, answer.Observability.FaithfulnessScore); // düzeltilmiş skor benimsendi
+        Assert.DoesNotContain("desteklenmiyor olabilir", answer.Answer); // pass → uyarı YOK
+    }
+
+    [Fact]
+    public async Task Reflection_kapaliyken_dusuk_faithfulness_te_uyari_eklenir()
+    {
+        // Faithfulness açık ama reflection KAPALI → self-correction yok, düşük skorda uyarı eklenir.
+        var faith = new FakeFaithfulness(new FaithfulnessResult(0.4, ["iddia"], Passed: false));
+        var svc = Build(out var llm, out _, out _, out _,
+            faithfulnessEnabled: true, reflectionEnabled: false, faithfulness: faith);
+
+        var answer = await svc.AskAsync("Yıllık izin kaç gün?");
+
+        Assert.Equal(1, faith.EvaluateCalls);               // yeniden değerlendirme YOK
+        Assert.Equal(1, llm.CompleteCalls);                 // yeniden cevap YOK
+        Assert.Contains("desteklenmiyor olabilir", answer.Answer); // düşük skor → şeffaf uyarı
     }
 
     // --- Multi-turn konuşma hafızası ---

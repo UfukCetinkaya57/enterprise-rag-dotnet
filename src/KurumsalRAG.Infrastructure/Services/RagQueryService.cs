@@ -73,6 +73,9 @@ public sealed class RagQueryService : IRagQueryService
     private const string LimitedText =
         "Günlük demo limiti doldu veya demo geçici olarak kapalı. Lütfen yarın tekrar deneyin.";
 
+    private const string LowGroundednessWarning =
+        "\n\n⚠️ Not: Bu cevabın bir kısmı sağlanan dokümanlarca tam olarak desteklenmiyor olabilir.";
+
     // ---------------------------------------------------------------- Non-stream
 
     public async Task<RagAnswer> AskAsync(string question, CancellationToken cancellationToken = default)
@@ -111,7 +114,8 @@ public sealed class RagQueryService : IRagQueryService
             }
         }
 
-        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, history, cancellationToken);
+        var (context, sources, embeddingTokens, safeQuestion) =
+            await RetrieveContextAsync(guard, history, cancellationToken);
         var messages = RagPromptBuilder.Build(guard.SanitizedInput, context, history);
 
         LlmCompletion completion;
@@ -128,17 +132,45 @@ public sealed class RagQueryService : IRagQueryService
                 [], new RagObservability(0, 0, 0, 0), AnswerType.Limited);
         }
 
+        // answerText: kaydedilecek/cache'lenecek TEMİZ cevap (uyarı banner'ı buraya EKLENMEZ).
+        var answerText = completion.Content;
+        var extraTokens = 0;
+        var lowGroundedness = false;
+
         double? faithfulnessScore = null;
-        if (_options.Faithfulness.Enabled && !context.IsEmpty)
+        if (_options.Faithfulness.Enabled && !context.IsEmpty && !RagPromptBuilder.IsRefusal(answerText))
         {
-            var eval = await _faithfulness.EvaluateAsync(completion.Content, context, cancellationToken);
+            var eval = await _faithfulness.EvaluateAsync(answerText, context, cancellationToken);
             faithfulnessScore = eval.Score;
             if (!eval.Passed)
+            {
                 _logger.LogWarning("Düşük groundedness {Score:F2}: {Claims}",
                     eval.Score, string.Join(" | ", eval.UnsupportedClaims));
+
+                // Self-correction (reflection): desteklenmeyen iddialarla yeniden retrieve edip
+                // strict modda yeniden cevapla. Daha iyi/eşit skor gelirse onu al (orchestrator ile
+                // tutarlı >=). safeQuestion + history thread'lenir ki multi-turn'de retrieval bozulmasın.
+                if (_options.Reflection.Enabled)
+                {
+                    var (correctedAnswer, correctedEval, correctedSources, reflectTokens) =
+                        await SelfCorrectAsync(safeQuestion, history, answerText, eval, activeLlm, cancellationToken);
+                    extraTokens += reflectTokens;
+                    if (correctedEval.Score >= eval.Score)
+                    {
+                        answerText = correctedAnswer;
+                        faithfulnessScore = correctedEval.Score;
+                        sources = correctedSources;
+                        eval = correctedEval;
+                    }
+                }
+
+                // Hâlâ eşik altındaysa: banner'ı yalnızca KULLANICIYA gösterilen cevaba ekle,
+                // kaydedilen/cache'lenen answerText'i KİRLETME (sonraki turları bozmasın).
+                lowGroundedness = !eval.Passed;
+            }
         }
 
-        var totalTokens = completion.Usage.TotalTokens + embeddingTokens;
+        var totalTokens = completion.Usage.TotalTokens + embeddingTokens + extraTokens;
         await _budget.RecordUsageAsync(totalTokens, cancellationToken);
 
         var observability = new RagObservability(
@@ -151,17 +183,20 @@ public sealed class RagQueryService : IRagQueryService
 
         // Cache'le: yalnızca multi-turn KAPALIYKEN. Açıkken cache okuması hep atlanır
         // (ilk turdan sonra geçmiş dolar), o yüzden yazmak ölü kayıt olur.
+        // Cache ve geçmişe TEMİZ cevap yazılır (banner'sız) — sonraki turlar/cache kirlenmesin.
         if (!_options.Conversation.Enabled)
             await _cache.SetAsync(_session.SessionId, guard.SanitizedInput,
-                new CachedAnswer(completion.Content, sources, faithfulnessScore), cancellationToken);
+                new CachedAnswer(answerText, sources, faithfulnessScore), cancellationToken);
 
         // Turu geçmişe kaydet (multi-turn açıksa) — sonraki takip sorusu bunu görecek.
-        await PersistTurnAsync(guard.SanitizedInput, completion.Content, cancellationToken);
+        await PersistTurnAsync(guard.SanitizedInput, answerText, cancellationToken);
 
         _logger.LogInformation("Cevap üretildi. tokens={Tokens} faithfulness={Faith}",
             totalTokens, faithfulnessScore);
 
-        return new RagAnswer(completion.Content, sources, observability, AnswerType.Normal);
+        // Uyarı banner'ı yalnızca kullanıcıya dönen yanıta eklenir (kalıcı metne değil).
+        var displayAnswer = lowGroundedness ? answerText + LowGroundednessWarning : answerText;
+        return new RagAnswer(displayAnswer, sources, observability, AnswerType.Normal);
     }
 
     // ---------------------------------------------------------------- Stream
@@ -227,7 +262,8 @@ public sealed class RagQueryService : IRagQueryService
             }
         }
 
-        var (context, sources, embeddingTokens) = await RetrieveContextAsync(guard, history, cancellationToken);
+        // Stream'de self-correction yok (token akarken yeniden üretim uygun değil) → SafeQuestion discard.
+        var (context, sources, embeddingTokens, _) = await RetrieveContextAsync(guard, history, cancellationToken);
         var messages = RagPromptBuilder.Build(guard.SanitizedInput, context, history);
 
         yield return RagStreamChunk.Status(AnswerType.Normal);
@@ -364,7 +400,7 @@ public sealed class RagQueryService : IRagQueryService
     /// embed → session-filtreli retrieve → rerank → context. Embedding, GEÇMİŞLE yeniden yazılmış
     /// (bağımsız) soruyla yapılır ki takip soruları doğru chunk'ı bulsun. Embedding token tahminini de döndürür.
     /// </summary>
-    private async Task<(RetrievedContext Context, IReadOnlyList<CitedSource> Sources, int EmbeddingTokens)>
+    private async Task<(RetrievedContext Context, IReadOnlyList<CitedSource> Sources, int EmbeddingTokens, string SafeQuestion)>
         RetrieveContextAsync(
             PromptGuardResult guard,
             IReadOnlyList<ConversationTurn> history,
@@ -408,10 +444,72 @@ public sealed class RagQueryService : IRagQueryService
 
         var ranked = await _reranker.RerankAsync(safeQuestion, candidates, _options.Retrieval.TopN, cancellationToken);
 
-        // Parent-document: LLM'e child yerine BÜYÜK parent bağlamı ver. Birden fazla child aynı
-        // parent'a ait olabilir → parent'ı context'te BİR KEZ koy (tekrar/token israfını önle).
-        // Dedup anahtarı (DocumentId + parent): farklı dokümanlardaki AYNI boilerplate metin yanlışlıkla
-        // tek sayılıp meşru bir kaynağı düşürmesin (aynı doküman içi aynı büyük blok gerçekten tekrardır).
+        // Parent-document dedup + context kurulumu ortak yardımcıda (self-correction ile paylaşılır).
+        var (context, sources) = BuildContext(ranked);
+        return (context, sources, embeddingTokens, safeQuestion);
+    }
+
+    /// <summary>
+    /// Self-correction (retrieval-augmented reflection): ilk cevabın desteklenmeyen iddialarını
+    /// sorguya ekleyip YENİDEN retrieve eder (farklı/daha fazla chunk), sonra STRICT modda yeniden
+    /// cevaplar ve yeniden ölçer. Çağıran, skoru arttıysa bu sonucu benimser. Ekstra token maliyetini
+    /// döndürür. safeQuestion null geçilebilir — o zaman guard.SanitizedInput kullanılır.
+    /// </summary>
+    private async Task<(string Answer, FaithfulnessResult Eval, IReadOnlyList<CitedSource> Sources, int Tokens)>
+        SelfCorrectAsync(
+            string safeQuestion, IReadOnlyList<ConversationTurn> history, string previousAnswer,
+            FaithfulnessResult previousEval, ILlmProvider activeLlm, CancellationToken cancellationToken)
+    {
+        // safeQuestion: geçmişle yeniden yazılmış (bağımsız) soru → multi-turn'de doğru retrieval.
+        // Desteklenmeyen iddiaları sorguya ekle → retrieval o eksik bilgiyi hedeflesin.
+        var augmentedQuery = previousEval.UnsupportedClaims.Count > 0
+            ? safeQuestion + " " + string.Join(" ", previousEval.UnsupportedClaims)
+            : safeQuestion;
+
+        var allowed = AllowedSessions();
+        var queryEmbedding = await _embeddings.EmbedAsync(augmentedQuery, cancellationToken);
+        var vectorHits = await _vectorStore.SearchAsync(
+            queryEmbedding, _options.Retrieval.TopK, allowed, cancellationToken);
+
+        IReadOnlyList<ScoredChunk> candidates = vectorHits;
+        if (_options.Retrieval.Hybrid)
+        {
+            var keywordHits = await _vectorStore.SearchKeywordAsync(
+                augmentedQuery, _options.Retrieval.TopK, allowed, cancellationToken);
+            candidates = ReciprocalRankFusion.Fuse([vectorHits, keywordHits], _options.Retrieval.TopK);
+        }
+
+        var ranked = await _reranker.RerankAsync(augmentedQuery, candidates, _options.Retrieval.TopN, cancellationToken);
+        var (context, sources) = BuildContext(ranked);
+
+        var tokens = TokenEstimator.Estimate(augmentedQuery);
+
+        // Strict modda (context'e katı sadakat) yeniden cevapla — geçmiş korunur (multi-turn).
+        var messages = RagPromptBuilder.BuildStrict(safeQuestion, context, history);
+        LlmCompletion retryCompletion;
+        try
+        {
+            retryCompletion = await activeLlm.CompleteAsync(messages, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Reflection çağrısı başarısızsa (ör. 429) ilk cevaba dokunma.
+            _logger.LogWarning(ex, "Self-correction çağrısı başarısız; ilk cevap korunuyor.");
+            return (previousAnswer, previousEval, sources, tokens);
+        }
+
+        tokens += retryCompletion.Usage.TotalTokens;
+        var retriedEval = await _faithfulness.EvaluateAsync(retryCompletion.Content, context, cancellationToken);
+        _logger.LogInformation("Self-correction: {Before:F2} → {After:F2}",
+            previousEval.Score, retriedEval.Score);
+
+        return (retryCompletion.Content, retriedEval, sources, tokens);
+    }
+
+    /// <summary>Ranked chunk'lardan RetrievedContext + kaynak listesi kurar (parent-document dedup dahil).</summary>
+    private static (RetrievedContext Context, IReadOnlyList<CitedSource> Sources) BuildContext(
+        IReadOnlyList<ScoredChunk> ranked)
+    {
         var retrievedChunks = new List<RetrievedChunk>(ranked.Count);
         var sources = new List<CitedSource>(ranked.Count);
         var seenParents = new HashSet<string>(StringComparer.Ordinal);
@@ -419,18 +517,15 @@ public sealed class RagQueryService : IRagQueryService
         foreach (var scored in ranked)
         {
             var parent = scored.Chunk.ParentContent;
-            if (!string.IsNullOrEmpty(parent) &&
-                !seenParents.Add($"{scored.Chunk.DocumentId}|{parent}"))
-                continue; // aynı dokümandaki aynı parent zaten eklendi
+            if (!string.IsNullOrEmpty(parent) && !seenParents.Add($"{scored.Chunk.DocumentId}|{parent}"))
+                continue;
 
-            reference++; // [chunk:1]-tabanlı
-            // LLM'e verilecek metin: parent varsa parent, yoksa child'ın kendisi.
+            reference++;
             var contextText = string.IsNullOrEmpty(parent) ? scored.Chunk.Content : parent;
             retrievedChunks.Add(new RetrievedChunk(reference, scored.Chunk.Id, contextText, scored.Score));
             sources.Add(new CitedSource(reference, scored.Chunk.Id, scored.Score));
         }
-
-        return (new RetrievedContext(retrievedChunks), sources, embeddingTokens);
+        return (new RetrievedContext(retrievedChunks), sources);
     }
 
     /// <summary>Retrieval'ın görebileceği session'lar: kullanıcının kendi + seed (örnek doküman).</summary>

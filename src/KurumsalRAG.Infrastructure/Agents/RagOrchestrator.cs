@@ -24,10 +24,6 @@ public sealed class RagOrchestrator
     private const string LowGroundednessWarning =
         "\n\n⚠️ Not: Bu cevabın bir kısmı sağlanan dokümanlarca tam olarak desteklenmiyor olabilir.";
 
-    /// <summary>Cevap, standart "dokümanlarda yok" reti mi? (grounded davranış, iddia değil).</summary>
-    private static bool IsRefusal(string answer)
-        => answer.Contains(RagPromptBuilder.RefusalText, StringComparison.OrdinalIgnoreCase);
-
     public RagOrchestrator(
         RetrievalAgent retrieval,
         AnswerAgent answer,
@@ -52,7 +48,7 @@ public sealed class RagOrchestrator
 
         // Standart ret cevabı ("dokümanlarda yok") zaten grounded davranıştır — bir iddia
         // değildir. Denetime sokup düşük skorla cezalandırma; reflection'ı da atla.
-        if (IsRefusal(answer) || context.IsEmpty)
+        if (RagPromptBuilder.IsRefusal(answer) || context.IsEmpty)
         {
             var groundedRefusal = new FaithfulnessResult(1.0, [], Passed: true);
             _logger.LogInformation("Ret/boş context cevabı grounded sayıldı; faithlessness atlandı.");

@@ -79,8 +79,19 @@ internal sealed class FakeLlm : ILlmProvider
 
 internal sealed class FakeFaithfulness : IFaithfulnessEvaluator
 {
+    // Sıralı skorlar (self-correction testi için: ilk düşük, sonraki yüksek). Verilmezse hep 1.0/passed.
+    private readonly Queue<FaithfulnessResult> _scripted;
+    public int EvaluateCalls { get; private set; }
+
+    public FakeFaithfulness(params FaithfulnessResult[] scripted)
+        => _scripted = new Queue<FaithfulnessResult>(scripted);
+
     public Task<FaithfulnessResult> EvaluateAsync(string a, RetrievedContext c, CancellationToken ct = default)
-        => Task.FromResult(new FaithfulnessResult(1.0, [], true));
+    {
+        EvaluateCalls++;
+        var result = _scripted.Count > 0 ? _scripted.Dequeue() : new FaithfulnessResult(1.0, [], true);
+        return Task.FromResult(result);
+    }
 }
 
 internal sealed class FakeCache : IResponseCache
