@@ -29,10 +29,16 @@ internal sealed class FakeVectorStore : IVectorStore
     public Task<bool> IsHealthyAsync(CancellationToken ct = default) => Task.FromResult(true);
     public Task<int> PurgeExpiredAsync(DateTimeOffset o, string keep, CancellationToken ct = default) => Task.FromResult(0);
 
+    // Testin döndürülecek chunk'ları özelleştirmesi için (parent-document dedup senaryosu vb.).
+    // Verilmezse varsayılan tek chunk (mevcut testlerle uyumlu).
+    public IReadOnlyList<ScoredChunk>? SeedHits { get; init; }
+
     public Task<IReadOnlyList<ScoredChunk>> SearchAsync(
         float[] q, int topK, IReadOnlyCollection<string> allowedSessionIds, CancellationToken ct = default)
     {
         LastAllowedSessions = allowedSessionIds;
+        if (SeedHits is not null)
+            return Task.FromResult(SeedHits);
         var chunk = new DocumentChunk { Id = Guid.NewGuid(), Content = "örnek içerik", SessionId = "seed" };
         return Task.FromResult<IReadOnlyList<ScoredChunk>>([new ScoredChunk(chunk, 0.9)]);
     }

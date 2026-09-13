@@ -44,10 +44,10 @@ public sealed class PgVectorStore : IVectorStore
         await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
 
         const string sql = """
-            INSERT INTO chunks (id, document_id, session_id, content, chunk_index, token_count, embedding)
-            VALUES (@id, @document_id, @session_id, @content, @chunk_index, @token_count, @embedding)
+            INSERT INTO chunks (id, document_id, session_id, content, parent_content, chunk_index, token_count, embedding)
+            VALUES (@id, @document_id, @session_id, @content, @parent_content, @chunk_index, @token_count, @embedding)
             ON CONFLICT (id) DO UPDATE
-                SET content = EXCLUDED.content, embedding = EXCLUDED.embedding
+                SET content = EXCLUDED.content, parent_content = EXCLUDED.parent_content, embedding = EXCLUDED.embedding
             """;
 
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -58,6 +58,7 @@ public sealed class PgVectorStore : IVectorStore
             cmd.Parameters.AddWithValue("document_id", chunk.DocumentId);
             cmd.Parameters.AddWithValue("session_id", chunk.SessionId);
             cmd.Parameters.AddWithValue("content", chunk.Content);
+            cmd.Parameters.AddWithValue("parent_content", (object?)chunk.ParentContent ?? DBNull.Value);
             cmd.Parameters.AddWithValue("chunk_index", chunk.ChunkIndex);
             cmd.Parameters.AddWithValue("token_count", chunk.TokenCount);
             cmd.Parameters.AddWithValue("embedding", new Vector(chunk.Embedding));
@@ -78,7 +79,7 @@ public sealed class PgVectorStore : IVectorStore
         // <=> = cosine distance (0=aynı yön). Skor = 1 - distance => yüksek = daha alakalı.
         // session_id = ANY(@sessions): yalnızca izin verilen session'lar (kullanıcı + seed).
         const string sql = """
-            SELECT id, document_id, session_id, content, chunk_index, token_count,
+            SELECT id, document_id, session_id, content, chunk_index, token_count, parent_content,
                    1 - (embedding <=> @query) AS score
             FROM chunks
             WHERE session_id = ANY(@sessions)
@@ -91,7 +92,18 @@ public sealed class PgVectorStore : IVectorStore
         cmd.Parameters.AddWithValue("sessions", allowedSessionIds.ToArray());
         cmd.Parameters.AddWithValue("topk", topK);
 
-        var results = new List<ScoredChunk>(topK);
+        return await ReadScoredChunksAsync(cmd, topK, cancellationToken);
+    }
+
+    /// <summary>
+    /// SELECT sonucunu ScoredChunk listesine okur. Kolon sırası:
+    /// 0 id, 1 document_id, 2 session_id, 3 content, 4 chunk_index, 5 token_count, 6 parent_content, 7 score.
+    /// Embedding geri okunmaz (gereksiz ağırlık).
+    /// </summary>
+    private static async Task<IReadOnlyList<ScoredChunk>> ReadScoredChunksAsync(
+        NpgsqlCommand cmd, int capacity, CancellationToken cancellationToken)
+    {
+        var results = new List<ScoredChunk>(capacity);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -102,10 +114,10 @@ public sealed class PgVectorStore : IVectorStore
                 SessionId = reader.GetString(2),
                 Content = reader.GetString(3),
                 ChunkIndex = reader.GetInt32(4),
-                TokenCount = reader.GetInt32(5)
-                // Embedding retrieval'da geri okunmuyor (gereksiz ağırlık).
+                TokenCount = reader.GetInt32(5),
+                ParentContent = reader.IsDBNull(6) ? null : reader.GetString(6)
             };
-            results.Add(new ScoredChunk(chunk, reader.GetDouble(6)));
+            results.Add(new ScoredChunk(chunk, reader.GetDouble(7)));
         }
         return results;
     }
@@ -132,7 +144,7 @@ public sealed class PgVectorStore : IVectorStore
                         tsvector_to_array(to_tsvector('turkish', immutable_unaccent(@q))),
                         ' | ')) AS tsq
             )
-            SELECT c.id, c.document_id, c.session_id, c.content, c.chunk_index, c.token_count,
+            SELECT c.id, c.document_id, c.session_id, c.content, c.chunk_index, c.token_count, c.parent_content,
                    ts_rank(c.content_tsv, q.tsq) AS score
             FROM chunks c, q
             WHERE c.session_id = ANY(@sessions)
@@ -147,22 +159,7 @@ public sealed class PgVectorStore : IVectorStore
         cmd.Parameters.AddWithValue("sessions", allowedSessionIds.ToArray());
         cmd.Parameters.AddWithValue("topk", topK);
 
-        var results = new List<ScoredChunk>(topK);
-        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var chunk = new DocumentChunk
-            {
-                Id = reader.GetGuid(0),
-                DocumentId = reader.GetGuid(1),
-                SessionId = reader.GetString(2),
-                Content = reader.GetString(3),
-                ChunkIndex = reader.GetInt32(4),
-                TokenCount = reader.GetInt32(5)
-            };
-            results.Add(new ScoredChunk(chunk, reader.GetDouble(6)));
-        }
-        return results;
+        return await ReadScoredChunksAsync(cmd, topK, cancellationToken);
     }
 
     public async Task<int> PurgeExpiredAsync(

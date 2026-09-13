@@ -20,8 +20,9 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 | 6 | Çok-sağlayıcılı BYOK (OpenAI/Gemini/Grok) | ✅ Canlı | Kullanıcı cevap modelini seçer; embedding sabit |
 | 7 | Swagger/OpenAPI + CI/CD + integration test | ✅ Canlı | Self-dokümante API + yeşil CI + gerçek-DB testleri |
 | 8 | Redis cache + Cohere cross-encoder reranker | ✅ | Dağıtık cache + gerçek cross-encoder, ikisi de config-seçilebilir |
+| 9 | Parent-Document Retrieval (small-to-big) | ✅ | Küçük child ile ara, LLM'e büyük parent bağlamı ver |
 
-**Test durumu:** 46 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
+**Test durumu:** 51 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
 **Mimari ilke:** Her özellik bir *port* (interface) arkasında; somut sağlayıcı değişse iş mantığı değişmez.
 
 ---
@@ -148,6 +149,23 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 - Cohere `top_n`, aday sayısını aşamaz → `Math.Min` ile clamp (küçük setlerde rerank sessizce atlanmasın).
 
 **Mülakatta:** "Cache/reranking'i nasıl ölçeklerdin?" → "Cache'i port arkasında tuttuğum için Postgres'ten Redis'e geçiş tek config; TTL'i Redis expiry'sine devrettim. Reranking'de gerçek cross-encoder (Cohere) ekledim — bi-encoder cosine'dan farklı olarak query+doc'u birlikte skorlar. İkisini de opsiyonel iyileştirme olarak tasarladım: backend çökse bile ana akış (cache-miss / retrieval-sırası) çalışmaya devam eder."
+
+---
+
+## 9. Parent-Document Retrieval ("small-to-big")
+
+**Problem — chunk boyutu ikilemi:** Küçük chunk = isabetli retrieval (dar, net eşleşme) ama LLM'e eksik bağlam. Büyük chunk = zengin bağlam ama retrieval gürültülü (embedding çok konuyu ortalar). İkisini aynı anda isteyemezsin.
+
+**Çözüm:** Küçük **child** ile ARA, LLM'e child'ın ait olduğu **büyük parent** bloğu ver.
+- Ingestion: metin → büyük parent blokları → her parent küçük child'lara bölünür. Her child kaydı, parent'ının tam metnini taşır (`parent_content`). Embedding **child** üzerinden.
+- Retrieval: child ile ara/rerank → context'e child yerine **parent** koy. Aynı parent'a düşen birden çok child → parent bir kez (tekrar/token israfı yok).
+
+**Teknik incelikler (kod incelemesinden):**
+- Dedup anahtarı `DocumentId + parent` — farklı dokümandaki aynı boilerplate metin meşru bir kaynağı düşürmesin.
+- `ParentMaxTokens <= MaxTokens` yanlış config → parent≈child, özellik anlamsızlaşır → ingestion'da uyarı.
+- Config-seçilebilir (`Chunking:Strategy = FixedSize | ParentDocument`); strateji değişince re-ingest gerekir (belgelendi).
+
+**Mülakatta:** "Chunk boyutunu nasıl seçersin?" → "İkilem var: küçük chunk iyi retrieval, büyük chunk iyi bağlam. Parent-document retrieval ile ikisini ayırdım — küçük child ile arıyorum (isabet), LLM'e büyük parent'ı veriyorum (tam cevap). Aynı parent'a düşen child'ları context'te tekilliyorum ki token israf olmasın."
 
 ---
 

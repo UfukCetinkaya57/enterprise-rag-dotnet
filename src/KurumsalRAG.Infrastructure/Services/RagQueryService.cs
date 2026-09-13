@@ -408,13 +408,25 @@ public sealed class RagQueryService : IRagQueryService
 
         var ranked = await _reranker.RerankAsync(safeQuestion, candidates, _options.Retrieval.TopN, cancellationToken);
 
+        // Parent-document: LLM'e child yerine BÜYÜK parent bağlamı ver. Birden fazla child aynı
+        // parent'a ait olabilir → parent'ı context'te BİR KEZ koy (tekrar/token israfını önle).
+        // Dedup anahtarı (DocumentId + parent): farklı dokümanlardaki AYNI boilerplate metin yanlışlıkla
+        // tek sayılıp meşru bir kaynağı düşürmesin (aynı doküman içi aynı büyük blok gerçekten tekrardır).
         var retrievedChunks = new List<RetrievedChunk>(ranked.Count);
         var sources = new List<CitedSource>(ranked.Count);
-        for (var i = 0; i < ranked.Count; i++)
+        var seenParents = new HashSet<string>(StringComparer.Ordinal);
+        var reference = 0;
+        foreach (var scored in ranked)
         {
-            var reference = i + 1; // [chunk:1]-tabanlı
-            var scored = ranked[i];
-            retrievedChunks.Add(new RetrievedChunk(reference, scored.Chunk.Id, scored.Chunk.Content, scored.Score));
+            var parent = scored.Chunk.ParentContent;
+            if (!string.IsNullOrEmpty(parent) &&
+                !seenParents.Add($"{scored.Chunk.DocumentId}|{parent}"))
+                continue; // aynı dokümandaki aynı parent zaten eklendi
+
+            reference++; // [chunk:1]-tabanlı
+            // LLM'e verilecek metin: parent varsa parent, yoksa child'ın kendisi.
+            var contextText = string.IsNullOrEmpty(parent) ? scored.Chunk.Content : parent;
+            retrievedChunks.Add(new RetrievedChunk(reference, scored.Chunk.Id, contextText, scored.Score));
             sources.Add(new CitedSource(reference, scored.Chunk.Id, scored.Score));
         }
 

@@ -64,11 +64,19 @@ public sealed class RetrievalAgent
 
         var ranked = await _reranker.RerankAsync(question, candidates, _options.TopN, cancellationToken);
 
+        // Parent-document: LLM'e child yerine parent bağlamı; aynı parent bir kez (bkz. RagQueryService).
         var chunks = new List<RetrievedChunk>(ranked.Count);
-        for (var i = 0; i < ranked.Count; i++)
+        var seenParents = new HashSet<string>(StringComparer.Ordinal);
+        var reference = 0;
+        foreach (var scored in ranked)
         {
-            var scored = ranked[i];
-            chunks.Add(new RetrievedChunk(i + 1, scored.Chunk.Id, scored.Chunk.Content, scored.Score));
+            var parent = scored.Chunk.ParentContent;
+            if (!string.IsNullOrEmpty(parent) && !seenParents.Add($"{scored.Chunk.DocumentId}|{parent}"))
+                continue;
+
+            reference++;
+            var contextText = string.IsNullOrEmpty(parent) ? scored.Chunk.Content : parent;
+            chunks.Add(new RetrievedChunk(reference, scored.Chunk.Id, contextText, scored.Score));
         }
         return new RetrievedContext(chunks);
     }

@@ -72,6 +72,10 @@ public sealed class DatabaseInitializer : IHostedService
             CREATE INDEX IF NOT EXISTS idx_chunks_session_id  ON chunks (session_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_created_at  ON chunks (created_at);
 
+            -- Parent-document retrieval: child (content) ile aranır, LLM'e bu parent bağlamı verilir.
+            -- NULL ise klasik davranış (content'in kendisi kullanılır). Idempotent.
+            ALTER TABLE chunks ADD COLUMN IF NOT EXISTS parent_content TEXT;
+
             -- Hybrid search keyword ayağı: unaccent + 'turkish' full-text generated kolon + GIN index.
             -- unaccent sayesinde 'yıllık' ile 'yillik' aynı token'a düşer (Türkçe diakritik toleransı).
             -- IF NOT EXISTS: idempotent (her açılışta yeniden hesaplamaz). Şema değişiminde temiz volume gerekir.

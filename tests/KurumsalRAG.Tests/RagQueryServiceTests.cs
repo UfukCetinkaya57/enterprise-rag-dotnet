@@ -13,10 +13,10 @@ public sealed class RagQueryServiceTests
         CachedAnswer? cacheHit = null, bool demoEnabled = true, bool withinBudget = true,
         string sessionId = "user-1",
         bool conversationEnabled = false, FakeConversationStore? conversation = null,
-        FakeQueryRewriter? rewriter = null)
+        FakeQueryRewriter? rewriter = null, FakeVectorStore? vectorStore = null)
     {
         llm = new FakeLlm();
-        store = new FakeVectorStore();
+        store = vectorStore ?? new FakeVectorStore();
         cache = new FakeCache(cacheHit);
         budget = new FakeBudget(withinBudget);
 
@@ -82,6 +82,29 @@ public sealed class RagQueryServiceTests
 
         Assert.Equal(AnswerType.Limited, answer.Type);
         Assert.Equal(0, llm.CompleteCalls);
+    }
+
+    [Fact]
+    public async Task ParentDocument_ayni_parenta_ait_childlar_context_te_bir_kez_gelir()
+    {
+        // Aynı parent'a ait 2 child + ayrı parent'lı 1 child = 3 hit → context'te 2 kaynak beklenir.
+        var sharedParent = "BÜYÜK PARENT BLOK: uzaktan çalışma ve izin kuralları burada.";
+        var hits = new List<KurumsalRAG.Domain.ValueObjects.ScoredChunk>
+        {
+            new(new KurumsalRAG.Domain.Entities.DocumentChunk
+                { Id = Guid.NewGuid(), Content = "child-a", ParentContent = sharedParent, SessionId = "seed" }, 0.9),
+            new(new KurumsalRAG.Domain.Entities.DocumentChunk
+                { Id = Guid.NewGuid(), Content = "child-b", ParentContent = sharedParent, SessionId = "seed" }, 0.8),
+            new(new KurumsalRAG.Domain.Entities.DocumentChunk
+                { Id = Guid.NewGuid(), Content = "child-c", ParentContent = "AYRI PARENT", SessionId = "seed" }, 0.7),
+        };
+        var store = new FakeVectorStore { SeedHits = hits };
+        var svc = Build(out _, out _, out _, out _, vectorStore: store);
+
+        var answer = await svc.AskAsync("soru");
+
+        // 3 child → 2 benzersiz parent → 2 kaynak (aynı parent tekrar etmedi).
+        Assert.Equal(2, answer.Sources.Count);
     }
 
     [Fact]

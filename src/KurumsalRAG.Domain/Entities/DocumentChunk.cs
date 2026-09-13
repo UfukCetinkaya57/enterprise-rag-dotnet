@@ -14,6 +14,13 @@ public sealed class DocumentChunk
 
     public string Content { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Parent-document retrieval: bu child'ın ait olduğu BÜYÜK parent bloğun metni.
+    /// Retrieval child (Content) ile yapılır; LLM'e bu parent bağlamı verilir. NULL ise
+    /// klasik davranış (Content'in kendisi kullanılır).
+    /// </summary>
+    public string? ParentContent { get; init; }
+
     /// <summary>Doküman içindeki 0-tabanlı sıra numarası.</summary>
     public int ChunkIndex { get; init; }
 

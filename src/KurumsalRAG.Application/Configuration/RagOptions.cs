@@ -40,6 +40,23 @@ public sealed class ChunkingOptions
 
     /// <summary>Chunk'lar arası örtüşme oranı (0-1). Spec: ~%10-15.</summary>
     public double OverlapRatio { get; init; } = 0.12;
+
+    /// <summary>
+    /// Chunk'lama stratejisi: "FixedSize" (varsayılan) veya "ParentDocument".
+    /// ParentDocument: küçük child ile ARA (isabetli retrieval), LLM'e child'ın BÜYÜK parent
+    /// bağlamını ver (tam cevap). "small-to-big" tekniği.
+    ///
+    /// NOT: Strateji ingestion anında uygulanır; DEĞİŞTİRİLİRSE mevcut dokümanlar yeniden ingest
+    /// edilmeli (eski chunk'ların parent_content'i NULL kalır → karışık retrieval). Temiz geçiş için
+    /// dokümanları yeniden yükleyin (demo'da seed yeniden ingest edilir, kullanıcı dokümanları TTL ile).
+    /// </summary>
+    public string Strategy { get; init; } = "FixedSize";
+
+    /// <summary>
+    /// ParentDocument stratejisinde parent bloğun hedef boyutu (token). Child <see cref="MaxTokens"/>
+    /// ile bölünür; parent bunun katı kadar büyük olmalı ki "büyük bağlam" anlamı olsun.
+    /// </summary>
+    public int ParentMaxTokens { get; init; } = 1500;
 }
 
 public sealed class RetrievalOptions
