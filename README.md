@@ -1,14 +1,40 @@
 # Enterprise RAG + Agentic — Kurumsal Doküman Asistanı
 
-Kurumsal PDF dokümanları üzerinde kaynak-atıflı soru-cevap sunan, **provider-agnostik** bir
-RAG (Retrieval Augmented Generation) sistemi ve **Semantic Kernel** tabanlı agentic doğrulama
-katmanı. .NET 8 / ASP.NET Core, Clean Architecture, PostgreSQL + pgvector.
+![CI](https://github.com/UfukCetinkaya57/enterprise-rag-dotnet/actions/workflows/ci.yml/badge.svg)
+![.NET](https://img.shields.io/badge/.NET-10-512BD4)
+![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen)
+![Architecture](https://img.shields.io/badge/architecture-Clean%20%2F%20Ports%20%26%20Adapters-informational)
 
-Kullanıcı bir PDF yükler → sistem metni chunk'lar, embed eder, vektör deposuna yazar. Kullanıcı
-soru sorar → ilgili chunk'lar getirilir, yeniden sıralanır (rerank), context'e dayalı cevap
-üretilir ve **stream** edilir. Bir **faithfulness (groundedness) checker** ajanı cevabın gerçekten
-getirilen context'e dayandığını denetler; bir **prompt injection guard** kullanıcı girdisini
-işlemeden önce süzer.
+Kurumsal PDF dokümanları üzerinde **kaynak-atıflı, halüsinasyona karşı denetimli** soru-cevap
+sunan, **provider-agnostik** bir RAG (Retrieval Augmented Generation) + agentic sistem.
+.NET 10 / ASP.NET Core · Clean Architecture · PostgreSQL + pgvector · Semantic Kernel.
+
+**🔗 Canlı demo:** **[rag.ufukcetinkaya.com](https://rag.ufukcetinkaya.com)** — seed doküman yüklü,
+hemen soru sorabilirsiniz. Arayüz her cevabın **retrieval/üretim süresini, faithfulness skorunu ve
+aktif konfigürasyonu** canlı gösterir (observability paneli).
+
+Kullanıcı bir PDF yükler → sistem metni chunk'lar, embed eder, pgvector'e yazar. Kullanıcı soru
+sorar → **hibrit arama** (vektör + keyword + RRF) ilgili chunk'ları getirir, **rerank** eder,
+context'e dayalı cevabı **stream** eder. Bir **faithfulness checker** cevabın gerçekten context'e
+dayandığını denetler; düşükse **self-correction** devreye girer. Bir **prompt injection guard**
+girdiyi işlemeden önce süzer.
+
+---
+
+## ✨ Öne çıkan özellikler
+
+| Alan | Teknik |
+|---|---|
+| **Retrieval** | Hibrit arama (vektör + PostgreSQL full-text + **RRF** füzyon) · iki-aşamalı rerank (LLM / hibrit / **Cohere cross-encoder**) |
+| **Chunking** | 3 strateji: sabit-boyut · **parent-document** (small-to-big) · **semantic** (anlam sınırları) — config-seçilebilir, eval ile kıyaslanmış |
+| **Kalite / güven** | Faithfulness (groundedness) ölçümü · **retrieval-augmented self-correction** · kaynak atıfı (`[chunk:N]`) · prompt injection guard |
+| **Provider-agnostik** | OpenAI · Gemini · Grok — tek port arkasında; **BYOK** (kullanıcı kendi anahtarı) + çoklu-anahtar rotasyonu (failover) |
+| **Konuşma** | Multi-turn hafıza + **query rewriting** (takip soruları) |
+| **Değerlendirme** | RAGAS-tarzı **eval harness**: Recall@k · MRR · answer accuracy · refusal · faithfulness |
+| **Production** | Session izolasyonu · IP/token/session kotaları · TTL · Redis/Postgres cache · kill switch · SSE streaming · dayanıklılık (Polly) |
+| **DevX** | **CI/CD** (GitHub Actions) · unit + **integration testler** (Testcontainers, gerçek pgvector) · **OpenAPI/Swagger** (`/docs`) · observability paneli |
+
+> 📓 Her entegrasyonun "problem → çözüm → nasıl anlatılır" kaydı: [docs/YOL-HARITASI-VE-KATKILAR.md](docs/YOL-HARITASI-VE-KATKILAR.md)
 
 ---
 
@@ -18,52 +44,56 @@ işlemeden önce süzer.
 Domain hiçbir şeye bağlı değildir; Application yalnızca **port** (interface) tanımlar, somut
 **adapter**'lar Infrastructure'dadır. Bu, sağlayıcı değişimini tek bir katmanla sınırlar.
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  Api            Controller'lar · SSE · /health · DI kompozisyon kökü │
-├────────────────────────────────────────────────────────────────────┤
-│  Infrastructure OpenAI · pgvector · SK ajanları · PDF · guard        │  (adapter'lar)
-├────────────────────────────────────────────────────────────────────┤
-│  Application    ILlmProvider · IVectorStore · IReranker · ...        │  (portlar)
-├────────────────────────────────────────────────────────────────────┤
-│  Domain         DocumentChunk · RetrievedContext · ScoredChunk       │  (bağımlılıksız)
-└────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["<b>Api</b><br/>Controller'lar · SSE streaming · /health · /docs · DI kompozisyon kökü"]
+    I["<b>Infrastructure</b> (adapter'lar)<br/>OpenAI/Gemini/Grok · pgvector · Redis · Cohere · SK ajanları · PDF · guard"]
+    P["<b>Application</b> (portlar)<br/>ILlmProvider · IEmbeddingProvider · IVectorStore · IReranker · IResponseCache · ..."]
+    D["<b>Domain</b> (bağımlılıksız)<br/>DocumentChunk · RetrievedContext · ScoredChunk · ChatMessage"]
+    A --> I --> P --> D
 ```
 
 ### Ingestion pipeline (`POST /api/documents`)
 
-```
-PDF ──PdfPig──▶ metin ──TextChunker──▶ chunk'lar ──OpenAI embed──▶ pgvector
-                          (~180 token,                (1536-boyut)   (HNSW, cosine)
-                           %15 overlap)
+```mermaid
+flowchart LR
+    PDF["PDF"] -->|PdfPig| T["metin"]
+    T -->|"chunking<br/>(fixed / parent / semantic)"| C["chunk'lar"]
+    C -->|"embed<br/>(Gemini 768 / OpenAI 1536)"| V[("pgvector<br/>HNSW · cosine")]
 ```
 
 ### Query pipeline (`POST /api/chat` · `GET /api/chat/stream`)
 
-```
-soru ─▶ PromptGuard ─▶ embed ─▶ pgvector top-k ─▶ LlmReranker top-n ─▶ prompt ─▶ LLM ─▶ cevap
-        (injection)             (k=20, cosine)     (n=4)                          │
-                                                                                   ▼
-                                                        FaithfulnessChecker ── groundedness skoru
-                                                        (eşik altıysa → reflection: 1x strict retry)
+```mermaid
+flowchart LR
+    Q["soru"] --> G["PromptGuard<br/>(injection)"]
+    G --> R["query rewrite<br/>(multi-turn)"]
+    R --> H["hibrit arama<br/>vektör + keyword + RRF"]
+    H --> RR["rerank<br/>top-n"]
+    RR --> LLM["LLM cevap<br/>(stream)"]
+    LLM --> F{"faithfulness<br/>≥ eşik?"}
+    F -->|evet| OUT["kaynak-atıflı cevap"]
+    F -->|hayır| SC["self-correction<br/>yeniden retrieve + strict"]
+    SC --> OUT
 ```
 
-Agentic akış **RagOrchestrator** tarafından yürütülür: `retrieve → answer → check → (reflection)`.
+Agentic akış (diagnostics yolu) **RagOrchestrator** tarafından yürütülür: `retrieve → answer → check → (reflection)`.
 
 ---
 
 ## Teknoloji yığını
 
-- **.NET 8**, ASP.NET Core Web API
+- **.NET 10**, ASP.NET Core Web API (C# 12+)
 - **Microsoft.SemanticKernel** — agentic orkestrasyon (`IChatCompletionService`, plugin fonksiyonları)
-- **PostgreSQL + pgvector** — vektör deposu, **HNSW** index + cosine benzerliği (Npgsql + Pgvector)
-- **OpenAI** — `text-embedding-3-small` (1536), `gpt-4o-mini`
+- **PostgreSQL + pgvector** — vektör deposu, **HNSW** index + cosine + `to_tsvector` full-text (hibrit arama)
+- **LLM sağlayıcıları** — Gemini (`gemini-flash-lite`, `gemini-embedding-001`@768), OpenAI (`gpt-4o-mini`, `text-embedding-3-small`@1536), Grok (OpenAI-uyumlu) — tek port arkasında, config/BYOK ile seçilir
+- **Cohere Rerank** — cross-encoder yeniden sıralama (opsiyonel adapter)
+- **Redis** (StackExchange.Redis) — opsiyonel dağıtık yanıt cache'i (Postgres alternatifi)
 - **UglyToad.PdfPig** — PDF metin çıkarımı
-- **Polly** — 429/geçici hata için üstel geri çekilmeli retry
+- **Polly** — per-attempt timeout + geçici hata retry (dayanıklılık)
 - **SSE** (Server-Sent Events) — token-token cevap akışı
-
-> Not: Depo `net10.0` hedefiyle geliştirildi (mevcut SDK); tasarım ve API'ler .NET 8 ile birebir
-> uyumludur — `TargetFramework`'ü `net8.0` yapmak yeterlidir.
+- **OpenAPI / Scalar** — `/docs` self-dokümante API
+- **Test:** xUnit (unit) + **Testcontainers** (gerçek pgvector'e karşı integration) · **GitHub Actions** CI
 
 ---
 
@@ -80,12 +110,14 @@ Agentic akış **RagOrchestrator** tarafından yürütülür: `retrieve → answ
 
 ### Port → adapter eşlemesi
 
-| Port | Bugünkü adapter | Yarın takılabilecek |
+| Port | Bugünkü adapter(ler) | Yarın takılabilecek |
 |---|---|---|
-| `ILlmProvider` | `OpenAiLlmProvider` | Azure OpenAI, Ollama |
-| `IEmbeddingProvider` | `OpenAiEmbeddingProvider` | Azure, on-prem |
-| `IVectorStore` | `PgVectorStore` | Qdrant, Milvus, Azure AI Search |
-| `IReranker` | `LlmReranker` | cross-encoder, Cohere Rerank |
+| `ILlmProvider` | `GeminiLlmProvider` · `OpenAiLlmProvider` (Grok dahil) | Azure OpenAI, Ollama |
+| `IEmbeddingProvider` | `GeminiEmbeddingProvider` · `OpenAiEmbeddingProvider` | Azure, on-prem |
+| `IVectorStore` | `PgVectorStore` (vektör + full-text) | Qdrant, Milvus, Azure AI Search |
+| `IReranker` | `LlmReranker` · `HybridReranker` · `CohereReranker` | başka cross-encoder |
+| `IResponseCache` | `PgResponseCache` · `RedisResponseCache` | başka dağıtık cache |
+| `IApiKeyProvider` | `GeminiApiKeyProvider` (rotasyon + failover) | başka havuz stratejisi |
 | `IPromptGuard` | `RuleBasedPromptGuard` | LLM-based classifier |
 | `IFaithfulnessEvaluator` | `FaithfulnessCheckerAgent` (SK) | başka critic modeli |
 
@@ -93,12 +125,12 @@ Agentic akış **RagOrchestrator** tarafından yürütülür: `retrieve → answ
 
 ## Nasıl çalıştırılır
 
-**Gereksinimler:** .NET SDK, Docker, bir OpenAI API anahtarı.
+**Gereksinimler:** .NET 10 SDK, Docker, bir Gemini **veya** OpenAI API anahtarı.
 
 ```bash
 # 1) Secret'ları hazırla — .env.example placeholder içerir, gerçek key ASLA commit'lenmez
 cp .env.example .env
-#    .env içindeki OPENAI_API_KEY değerini kendi anahtarınla değiştir
+#    .env içine GEMINI_API_KEY (varsayılan sağlayıcı) veya OPENAI_API_KEY yaz
 #    (.env .gitignore'dadır)
 
 # 2) pgvector'ı ayağa kaldır — extension + şema + HNSW index otomatik kurulur (db/init.sql)
@@ -142,34 +174,57 @@ curl -N "http://localhost:5264/api/chat/stream?question=Ev%20ofisi%20ekipman%20d
 | Metot & yol | İş |
 |---|---|
 | `POST /api/documents` | PDF yükle → chunk + embed + store |
-| `POST /api/chat` | Non-stream, kaynak-atıflı cevap + observability |
+| `POST /api/chat` | Non-stream, kaynak-atıflı cevap + observability (BYOK header'ları destekler) |
 | `GET  /api/chat/stream` | SSE, token-token cevap |
+| `GET  /api/system/config` | Aktif konfigürasyon (observability paneli için) |
 | `GET  /health` | DB + provider erişilebilirlik |
+| `GET  /docs` | OpenAPI / Swagger arayüzü (Scalar) |
 | `GET  /api/diagnostics/rerank` | Rerank öncesi/sonrası sıralama (yan yana) |
 | `GET  /api/diagnostics/faithfulness` | Tam agentic akış + groundedness |
 | `POST /api/diagnostics/faithfulness/check` | İzole checker (kurgulanan cevabı denetle) |
 | `GET  /api/diagnostics/eval` | Tek yapılandırılmış eval kaydı (guard + chunk + faithfulness + token + maliyet) |
+| `GET  /api/diagnostics/eval-suite` | Altın soru seti → Recall@k · MRR · answer accuracy · refusal · faithfulness |
+
+> Diagnostics uçları `Demo:DiagnosticsEnabled=false` ile production'da **404** döner (LLM çağrısı yaparlar; dev/CI aracıdır).
+
+### BYOK — kendi anahtarınla (herhangi sağlayıcı)
+
+```bash
+# Kullanıcı kendi Gemini/OpenAI/Grok anahtarını header'la verir → cevap onun modelinden,
+# onun kotasından üretilir; demo limitine takılmaz. (Embedding/arama her zaman havuzdadır.)
+curl -X POST http://localhost:8080/api/chat \
+     -H "Content-Type: application/json" \
+     -H "X-User-Ai-Provider: openai" \
+     -H "X-User-Api-Key: sk-..." \
+     -d '{"question":"Yıllık izin kaç gün?"}'
+```
 
 ---
 
 ## Provider'ı değiştirme
 
-**→ Azure OpenAI (KVKK / TR bölgesi):** `KernelFactory`'de `AddOpenAIChatCompletion` →
-`AddAzureOpenAIChatCompletion`; OpenAI adapter'larının `BaseUrl`'ünü Azure endpoint'ine çevir.
-İş mantığı değişmez.
+**→ OpenAI / Gemini / Grok arası:** `appsettings`'te `Ai:Provider` (`Gemini`|`OpenAI`) tek satır —
+iş mantığı değişmez. Kullanıcılar ayrıca `X-User-Ai-Provider` + `X-User-Api-Key` header'larıyla
+kendi sağlayıcılarını (OpenAI/Gemini/Grok) **runtime'da** seçebilir (BYOK).
+
+**→ Azure OpenAI (KVKK / TR bölgesi):** OpenAI adapter'ının `BaseUrl`'ünü Azure endpoint'ine çevir;
+`KernelFactory`'de `AddAzureOpenAIChatCompletion`. İş mantığı değişmez.
 
 **→ On-prem Ollama:** `ILlmProvider` / `IEmbeddingProvider` için Ollama adapter'ları yaz,
-`DependencyInjection`'da kaydı değiştir. Embedding boyutu değişirse `db/init.sql`'deki
-`vector(1536)` ve `EmbeddingDimensions`'ı güncelle.
+`DependencyInjection`'da kaydı değiştir. Embedding boyutu değişirse şema `vector(N)` boyutu
+uygulama tarafında `EmbeddingDimensions`'tan otomatik gelir.
 
-**→ Farklı vektör deposu:** `IVectorStore` arkasına yeni adapter, DI'da tek satır.
+**→ Farklı vektör deposu / cache / reranker:** İlgili port arkasına yeni adapter, DI'da tek satır
+(cache: Postgres↔Redis, reranker: LLM↔Hybrid↔Cohere — hepsi config-seçilebilir).
 
 ---
 
 ## Güvenlik yaklaşımı
 
-- **Secret yönetimi.** API anahtarı yalnızca `.env` / ortam değişkeninde (`OPENAI_API_KEY`).
-  `appsettings`'te anahtar yok; `.env` `.gitignore`'da. Gerçek anahtar hiçbir zaman commit'lenmez.
+- **Secret yönetimi.** API anahtarları yalnızca `.env` / ortam değişkeninde (`GEMINI_API_KEY(S)`,
+  `OPENAI_API_KEY`, `COHERE_API_KEY`, `REDIS_CONNECTION`). `appsettings`'te anahtar yok; `.env`
+  `.gitignore`'da. Gerçek anahtar hiçbir zaman commit'lenmez. BYOK anahtarı yalnızca istek
+  scope'unda yaşar — body/log/cache'e girmez.
 - **Prompt injection guard.** Kural tabanlı ilk katman (block / sanitize, config'ten). Asıl
   güvence: system/user içeriğinin yapısal ayrımı (context'e gömülü komut talimat sayılmaz).
 - **On-prem / KVKK.** Provider soyutlaması sayesinde tüm LLM/embedding trafiği Azure'un TR
