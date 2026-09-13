@@ -20,9 +20,10 @@ Bu dosya, projeye eklenen her önemli entegrasyonun **kaydıdır**. Her madde ş
 | 6 | Çok-sağlayıcılı BYOK (OpenAI/Gemini/Grok) | ✅ Canlı | Kullanıcı cevap modelini seçer; embedding sabit |
 | 7 | Swagger/OpenAPI + CI/CD + integration test | ✅ Canlı | Self-dokümante API + yeşil CI + gerçek-DB testleri |
 | 8 | Redis cache + Cohere cross-encoder reranker | ✅ | Dağıtık cache + gerçek cross-encoder, ikisi de config-seçilebilir |
-| 9 | Parent-Document Retrieval (small-to-big) | ✅ | Küçük child ile ara, LLM'e büyük parent bağlamı ver |
+| 9 | Parent-Document Retrieval (small-to-big) | ✅ Canlı | Küçük child ile ara, LLM'e büyük parent bağlamı ver |
+| 10 | Semantic Chunking | ✅ | Sabit-boyut yerine anlam sınırlarında böl (cümle benzerliği) |
 
-**Test durumu:** 51 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
+**Test durumu:** 63 unit + 5 integration test, GitHub Actions'ta otomatik (yeşil).
 **Mimari ilke:** Her özellik bir *port* (interface) arkasında; somut sağlayıcı değişse iş mantığı değişmez.
 
 ---
@@ -177,6 +178,24 @@ LLM aslında 3 context-dışı soruyu da doğru reddetmişti; eval tam string e�
 çekirdek ifadeyle yakalayınca %100'e düzeldi. (Ölçüm aracının kendisini de doğrulamak gerektiğinin örneği.)
 
 **Mülakatta:** "Chunk boyutunu nasıl seçersin?" → "İkilem var: küçük chunk iyi retrieval, büyük chunk iyi bağlam. Parent-document retrieval ile ikisini ayırdım — küçük child ile arıyorum (isabet), LLM'e büyük parent'ı veriyorum (tam cevap). Aynı parent'a düşen child'ları context'te tekilliyorum ki token israf olmasın. Eval harness ile ölçtüm: parent-document ile recall/answer accuracy/faithfulness tam puan."
+
+---
+
+## 10. Semantic Chunking
+
+**Problem:** Sabit-boyut chunk'lama (FixedSize) metni kelime sayısına göre keser — bir cümlenin/konunun ortasından bölebilir. Chunk iki farklı konuyu karıştırırsa embedding'i ikisinin ortasını temsil eder → retrieval kalitesi düşer.
+
+**Çözüm:** Metni **anlam sınırlarında** böl. Ardışık cümlelerin embedding'leri arasındaki cosine benzerliği bir eşiğin (`SemanticBreakThreshold`) altına düşünce (konu değişimi) yeni chunk başlat. Her chunk tek bir konuya odaklanır.
+- Ingestion: metin → cümleler → cümleleri (parçalı) batch embed → ardışık benzerlik → sınırlar.
+- Config-seçilebilir 3. strateji (`Chunking:Strategy = FixedSize | ParentDocument | Semantic`).
+
+**Teknik incelikler (kod incelemesinden):**
+- **Batch limiti:** Büyük PDF binlerce cümle → tek embed çağrısı Gemini/OpenAI batch limitini aşar. 96'lık partilere böldüm (`EmbedInBatchesAsync`).
+- **Dev paragraf koruması:** Noktalamasız uzun metin tek "cümle" olup embedding limitini aşabilir → `SemanticMaxTokens`'ı aşan cümleyi kelime bazında alt-böldüm.
+- **Görünür hata:** Embedding boyut uyuşmazlığında sessizce "0 benzerlik" (her cümle ayrı chunk) yerine açık hata fırlat.
+- Ondalık koruması: "3.14" ortasındaki nokta cümle sonu sayılmaz.
+
+**Mülakatta:** "Chunking stratejileri?" → "Üçünü de yaptım: sabit-boyut (basit/hızlı), parent-document (small-to-big), semantic (anlam sınırları). Semantic'te ardışık cümle embedding benzerliği düşünce bölüyorum — konu bütünlüğünü korur. Config'ten seçilebilir, eval harness ile hangisinin daha iyi olduğunu ölçebiliyorum."
 
 ---
 

@@ -100,6 +100,7 @@ public static class DependencyInjection
         // --- Ingestion bileşenleri ---
         services.AddSingleton<PdfTextExtractor>();
         services.AddSingleton<TextChunker>();
+        services.AddSingleton<SemanticChunker>();
 
         // --- Adapter'lar (port -> somut) ---
         services.AddScoped<IVectorStore, PgVectorStore>();

@@ -57,6 +57,19 @@ public sealed class ChunkingOptions
     /// ile bölünür; parent bunun katı kadar büyük olmalı ki "büyük bağlam" anlamı olsun.
     /// </summary>
     public int ParentMaxTokens { get; init; } = 1500;
+
+    /// <summary>
+    /// Semantic stratejide bölme eşiği (0-1). Ardışık cümlelerin embedding benzerliği (cosine)
+    /// bu değerin ALTINA düşünce yeni chunk başlar (konu değişimi). Yüksek eşik = daha çok/küçük
+    /// chunk; düşük eşik = daha az/büyük. ~0.5 makul başlangıç.
+    /// </summary>
+    public double SemanticBreakThreshold { get; init; } = 0.5;
+
+    /// <summary>
+    /// Semantic chunk'ın hedef üst sınırı (token). Anlam sınırı gelmese bile bir chunk bu boyutu
+    /// aşınca zorla bölünür (aşırı büyük chunk / tek dev paragraf koruması).
+    /// </summary>
+    public int SemanticMaxTokens { get; init; } = 800;
 }
 
 public sealed class RetrievalOptions

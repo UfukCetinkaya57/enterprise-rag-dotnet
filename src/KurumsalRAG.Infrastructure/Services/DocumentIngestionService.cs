@@ -15,6 +15,7 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
 {
     private readonly PdfTextExtractor _pdfExtractor;
     private readonly TextChunker _chunker;
+    private readonly SemanticChunker _semanticChunker;
     private readonly IEmbeddingProvider _embeddings;
     private readonly IVectorStore _vectorStore;
     private readonly UploadOptions _upload;
@@ -24,6 +25,7 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
     public DocumentIngestionService(
         PdfTextExtractor pdfExtractor,
         TextChunker chunker,
+        SemanticChunker semanticChunker,
         IEmbeddingProvider embeddings,
         IVectorStore vectorStore,
         IOptions<DemoOptions> demo,
@@ -32,6 +34,7 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
     {
         _pdfExtractor = pdfExtractor;
         _chunker = chunker;
+        _semanticChunker = semanticChunker;
         _embeddings = embeddings;
         _vectorStore = vectorStore;
         _upload = demo.Value.Upload;
@@ -41,6 +44,9 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
 
     private bool ParentDocumentEnabled =>
         string.Equals(_chunking.Strategy, "ParentDocument", StringComparison.OrdinalIgnoreCase);
+
+    private bool SemanticEnabled =>
+        string.Equals(_chunking.Strategy, "Semantic", StringComparison.OrdinalIgnoreCase);
 
     public async Task<IngestionResult> IngestPdfAsync(
         Stream pdfStream,
@@ -54,10 +60,22 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
             throw new InvalidOperationException($"'{fileName}' dosyasından metin çıkarılamadı (boş ya da taranmış PDF olabilir).");
 
         // Strategy'ye göre chunk'la. ParentDocument: child ile embed, LLM'e parent bağlamı.
-        // FixedSize: klasik (parent = null, content'in kendisi kullanılır).
+        // Semantic: cümleleri embed edip anlam sınırlarında böl. FixedSize: klasik.
         IReadOnlyList<string> childTexts;
         IReadOnlyList<string?> parentTexts;
-        if (ParentDocumentEnabled)
+        if (SemanticEnabled)
+        {
+            // Cümlelere böl → cümleleri PARÇALI batch embed (provider batch limitini aşmamak için)
+            // → ardışık benzerlikle grupla. Büyük PDF binlerce cümle üretebilir; tek dev batch
+            // Gemini/OpenAI limitine takılır, o yüzden EmbedInBatchesAsync ile böleriz.
+            var sentences = _semanticChunker.SplitSentences(extract.Text);
+            if (sentences.Count == 0)
+                throw new InvalidOperationException($"'{fileName}' cümlelere bölünemedi.");
+            var sentenceEmbeddings = await EmbedInBatchesAsync(sentences, cancellationToken);
+            childTexts = _semanticChunker.GroupBySimilarity(sentences, sentenceEmbeddings);
+            parentTexts = new string?[childTexts.Count]; // Semantic tek başına, parent yok
+        }
+        else if (ParentDocumentEnabled)
         {
             // Guard: parent, child'dan belirgin büyük olmalı (small-to-big). Değilse parent≈child
             // olur ve özellik sessizce anlamsızlaşır → uyar (yanlış config production'a sızmasın).
@@ -80,8 +98,8 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
         _logger.LogInformation("'{File}' (session={Session}) {ChunkCount} parçaya bölündü (strateji={Strategy}).",
             fileName, sessionId, childTexts.Count, _chunking.Strategy);
 
-        // Embedding HER ZAMAN child üzerinden (isabetli retrieval).
-        var embeddings = await _embeddings.EmbedBatchAsync(childTexts, cancellationToken);
+        // Embedding HER ZAMAN child üzerinden (isabetli retrieval). Parçalı batch (limit koruması).
+        var embeddings = await EmbedInBatchesAsync(childTexts, cancellationToken);
 
         var document = DocumentEntity.Create(fileName, sessionId, fileBytes);
         var chunks = new List<DocumentChunk>(childTexts.Count);
@@ -113,5 +131,28 @@ public sealed class DocumentIngestionService : IDocumentIngestionService
             fileName, chunks.Count, totalTokens);
 
         return new IngestionResult(document.Id, fileName, chunks.Count, totalTokens);
+    }
+
+    /// <summary>
+    /// Metinleri sabit boyutlu partiler halinde embed eder (tek dev batch provider limitini aşmasın).
+    /// Semantic yolda cümle sayısı çok yüksek olabilir; Gemini batchEmbedContents ve OpenAI input
+    /// dizisi sınırlıdır. Sıra korunur (partiler ardışık birleştirilir).
+    /// </summary>
+    private const int EmbedBatchSize = 96;
+
+    private async Task<IReadOnlyList<float[]>> EmbedInBatchesAsync(
+        IReadOnlyList<string> texts, CancellationToken cancellationToken)
+    {
+        if (texts.Count <= EmbedBatchSize)
+            return await _embeddings.EmbedBatchAsync(texts, cancellationToken);
+
+        var all = new List<float[]>(texts.Count);
+        for (var start = 0; start < texts.Count; start += EmbedBatchSize)
+        {
+            var batch = texts.Skip(start).Take(EmbedBatchSize).ToArray();
+            var embedded = await _embeddings.EmbedBatchAsync(batch, cancellationToken);
+            all.AddRange(embedded);
+        }
+        return all;
     }
 }
